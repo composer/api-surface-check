@@ -33,6 +33,11 @@ on:
 permissions:
   contents: read
 
+# Cancel an in-progress preflight when a new push lands on the same PR.
+concurrency:
+  group: api-surface-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -65,6 +70,12 @@ on:
 permissions:
   contents: read
   pull-requests: write
+
+# Cancel an in-progress comment run when a re-run / repeat workflow_run fires
+# for the same head SHA.
+concurrency:
+  group: api-surface-comment-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
 
 jobs:
   comment:
