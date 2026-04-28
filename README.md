@@ -10,7 +10,7 @@ For every modified PHP file the action:
 2. Snapshots the same files on the **base** ref (extracted with `git archive`).
 3. Diffs the two snapshots. A method or constant is only reported on a class when its **introduction point** is the class itself — implementations of existing interface methods, overrides of parent methods, or members already declared on a parent in the unchanged code are not flagged.
 
-The result is written to a directory containing `comment-body.txt` (a markdown body, possibly empty) and `pr-number.txt`. A companion `scripts/post-comment.sh` posts/updates/deletes a PR comment based on that artifact.
+The result is written to a directory containing `comment-body.txt` (a markdown body, possibly empty). A companion `post-comment` sub-action posts, updates, or deletes a PR comment based on that body.
 
 ## Why static reflection?
 
@@ -84,8 +84,10 @@ jobs:
               echo "should-run=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Resolve the PR unconditionally so we can clean up a stale comment
+      # even when preflight says no API-relevant changes (e.g. a PR was
+      # updated to revert previously-reported additions).
       - id: pr
-        if: steps.preflight.outputs.should-run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -96,21 +98,20 @@ jobs:
           echo "number=$number" >> "$GITHUB_OUTPUT"
           echo "base-ref=$base_ref" >> "$GITHUB_OUTPUT"
 
-      - if: steps.pr.outputs.number
+      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
         uses: actions/checkout@v6
         with:
           ref: refs/pull/${{ steps.pr.outputs.number }}/head
           fetch-depth: 0
           persist-credentials: false
 
-      - if: steps.pr.outputs.number
+      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
         run: git fetch --no-tags origin "${{ steps.pr.outputs.base-ref }}:refs/remotes/origin/${{ steps.pr.outputs.base-ref }}"
 
-      - if: steps.pr.outputs.number
+      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
         uses: composer/api-surface-check@main
         with:
           base-ref: origin/${{ steps.pr.outputs.base-ref }}
-          pr-number: ${{ steps.pr.outputs.number }}
           # INPUTS / CONFIG GOES HERE
           # install-dependencies: true
           # paths: src/**/*.php
@@ -119,10 +120,15 @@ jobs:
           # show-removed: true
           # show-modified: true
 
+      # Always run post-comment when we have a PR. With analysis skipped,
+      # comment-body.txt is missing/empty and post-comment deletes any
+      # previously-posted bot comment.
       - if: steps.pr.outputs.number
+        uses: composer/api-surface-check/post-comment@main
+        with:
+          pr-number: ${{ steps.pr.outputs.number }}
         env:
           GH_TOKEN: ${{ github.token }}
-        uses: composer/api-surface-check/post-comment@main
 ```
 
 ### Why two workflows
@@ -157,7 +163,6 @@ jobs:
 | Input            | Default                    | Description                                                  |
 | ---------------- | -------------------------- | ------------------------------------------------------------ |
 | `base-ref`       | _required_                 | Git ref to compare HEAD against (e.g. `origin/main`).        |
-| `pr-number`      | (empty)                    | Saved alongside the comment body for the comment workflow.  |
 | `output-dir`     | `api-surface-result`       | Directory the artifact is written to.                       |
 | `comment-marker` | `<!-- api-surface-bot -->` | HTML marker used to identify previous bot comments.         |
 
@@ -184,12 +189,13 @@ Quickly scans the PR diff for tokens that could affect the API surface. Writes `
 
 ### `composer/api-surface-check/post-comment`
 
-Posts, updates, or deletes a PR comment based on the artifact produced by the main action. Use it in the comment workflow.
+Posts, updates, or deletes a PR comment based on the artifact produced by the main action. Use it in the comment workflow. Run it unconditionally once the PR is resolved — when given an empty/missing `comment-body.txt` it deletes any previously-posted bot comment, which fixes stale comments after a PR is updated to revert API additions.
 
-| Input            | Default                              | Description                                              |
-| ---------------- | ------------------------------------ | -------------------------------------------------------- |
-| `output-dir`     | `api-surface-result`                 | Directory containing `comment-body.txt`/`pr-number.txt`. |
-| `comment-marker` | `<!-- api-surface-bot -->`           | HTML marker that identifies previous bot comments.       |
+| Input            | Default                    | Description                                                                                                |
+| ---------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `pr-number`      | _required_                 | PR number to post / update / delete the comment on.                                                        |
+| `output-dir`     | `api-surface-result`       | Directory containing `comment-body.txt`. An empty/missing body deletes any existing marked comment.        |
+| `comment-marker` | `<!-- api-surface-bot -->` | HTML marker that identifies previous bot comments.                                                         |
 
 Requires `GH_TOKEN` env (passed in by the consumer) with `pull-requests: write`.
 

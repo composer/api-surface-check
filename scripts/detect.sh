@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Detect API surface changes between BASE_REF and HEAD.
 # Reads configuration from env vars (set by the action), produces an output
-# directory containing comment-body.txt (markdown body, possibly empty),
-# pr-number.txt (if PR_NUMBER is set), and the raw snapshots/diff for debugging.
+# directory containing comment-body.txt (markdown body, possibly empty) and
+# the head/base snapshot JSON files (kept for debugging).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,7 +12,6 @@ BASE_REF="${BASE_REF:?BASE_REF is required}"
 PATHS_GLOB="${PATHS_GLOB:-src/**/*.php}"
 SOURCE_ROOTS="${SOURCE_ROOTS:-src}"
 OUTPUT_DIR="${OUTPUT_DIR:-api-surface-result}"
-PR_NUMBER="${PR_NUMBER:-}"
 
 INCLUDE_INTERNAL="${INCLUDE_INTERNAL:-false}"
 TYPES="${TYPES:-class,interface,trait,enum,method,property,constant}"
@@ -38,9 +37,6 @@ read -r -a roots_array <<< "$(echo "${SOURCE_ROOTS}" | tr '\n' ' ' | tr ',' ' ')
 
 mkdir -p "${OUTPUT_DIR}"
 : > "${OUTPUT_DIR}/comment-body.txt"
-if [[ -n "${PR_NUMBER}" ]]; then
-    echo "${PR_NUMBER}" > "${OUTPUT_DIR}/pr-number.txt"
-fi
 
 # All files in scope (added, modified, or deleted) — snapshot.php will silently
 # ignore missing files, so we can pass the same list for both refs.

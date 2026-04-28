@@ -21,10 +21,6 @@ inputs:
     description: 'Directory to write outputs to (relative to the consuming workflow''s working dir).'
     required: false
     default: 'api-surface-result'
-  pr-number:
-    description: 'Pull request number; written to the artifact for the comment workflow.'
-    required: false
-    default: ''
   include-internal:
     description: 'Include symbols marked with @internal or @private.'
     required: false
@@ -71,7 +67,7 @@ outputs:
     description: 'Whether any reportable API surface changes were detected.'
     value: ${{ steps.detect.outputs.has-changes }}
   output-dir:
-    description: 'Directory containing comment-body.txt, pr-number.txt, and snapshots.'
+    description: 'Directory containing comment-body.txt and the head/base snapshot JSON files.'
     value: ${{ steps.detect.outputs.output-dir }}
 
 runs:
@@ -120,7 +116,6 @@ runs:
         SOURCE_ROOTS: ${{ inputs.source-roots }}
         VENDOR_PATH: ${{ steps.project-deps.outputs.vendor-path }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
-        PR_NUMBER: ${{ inputs.pr-number }}
         INCLUDE_INTERNAL: ${{ inputs.include-internal }}
         TYPES: ${{ inputs.types }}
         VISIBILITY: ${{ inputs.visibility }}

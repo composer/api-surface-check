@@ -239,18 +239,6 @@ final class DetectTest extends TestCase
         $this->assertStringContainsString('now: `public function mut(int $x, int $y): void`', $body);
     }
 
-    public function testPrNumberIsWrittenWhenProvided(): void
-    {
-        $this->commit(['src/Foo.php' => "<?php\nnamespace L;\nclass Foo {}\n"], 'base');
-        $this->commit(['src/Foo.php' => "<?php\nnamespace L;\nclass Foo { public function hi(): void {} }\n"], 'add method');
-
-        $this->runDetect(['PR_NUMBER' => '424242']);
-
-        $prFile = $this->repoDir . '/result/pr-number.txt';
-        $this->assertFileExists($prFile);
-        $this->assertSame('424242', trim(file_get_contents($prFile)));
-    }
-
     public function testVendorParentMethodIsNotReportedWhenVendorPathIsProvided(): void
     {
         // Pretend vendor/ is composer-installed: it lives outside SOURCE_ROOTS

@@ -8,13 +8,11 @@ OUTPUT_DIR="${OUTPUT_DIR:-api-surface-result}"
 COMMENT_MARKER="${COMMENT_MARKER:-<!-- api-surface-bot -->}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
+: "${PR_NUMBER:?PR_NUMBER is required}"
 
-if [[ ! -f "${OUTPUT_DIR}/pr-number.txt" ]]; then
-    echo "No pr-number.txt in ${OUTPUT_DIR}; nothing to do."
-    exit 0
-fi
-
-PR_NUMBER=$(cat "${OUTPUT_DIR}/pr-number.txt")
+# An empty body (or missing comment-body.txt) means: delete any existing
+# marked comment. This is what cleans up stale comments after a PR is updated
+# to remove the API additions originally reported.
 COMMENT_BODY=""
 if [[ -s "${OUTPUT_DIR}/comment-body.txt" ]]; then
     COMMENT_BODY=$(cat "${OUTPUT_DIR}/comment-body.txt")
