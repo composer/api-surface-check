@@ -1,0 +1,26 @@
+name: 'API Surface Check — Post Comment'
+description: 'Post / update / delete the PR comment for an API surface analysis result.'
+author: 'Composer'
+branding:
+  icon: 'message-circle'
+  color: 'blue'
+
+inputs:
+  output-dir:
+    description: 'Directory containing comment-body.txt and pr-number.txt produced by the analysis action.'
+    required: false
+    default: 'api-surface-result'
+  comment-marker:
+    description: 'HTML comment marker used to identify previous bot comments.'
+    required: false
+    default: '<!-- api-surface-bot -->'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Post or update API surface comment
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+      run: bash ${{ github.action_path }}/../scripts/post-comment.sh

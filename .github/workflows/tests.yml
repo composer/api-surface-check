@@ -1,0 +1,159 @@
+name: "Tests"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: "PHPUnit (PHP ${{ matrix.php }})"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php:
+          - 8.4
+          - latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # 2.37.0
+        with:
+          coverage: "none"
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+
+      - name: "Run tests"
+        run: vendor/bin/phpunit
+
+  action-smoke:
+    name: "Action smoke test"
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: "Set up scenario repo"
+        run: |
+          mkdir -p scenario/src
+          cd scenario
+          git init -q -b main
+          git config user.email t@t
+          git config user.name t
+
+          cat > src/Repo.php <<'EOF'
+          <?php
+          namespace SelfTest;
+
+          interface Iface {
+              public function action(): bool;
+          }
+
+          class Repo {
+              public function existing(): void {}
+              public function willBeRemoved(): int { return 0; }
+
+              /**
+               * @internal
+               */
+              public function alreadyInternal(): void {}
+          }
+          EOF
+          git add -A
+          git commit -q -m base
+
+          cat > src/Repo.php <<'EOF'
+          <?php
+          namespace SelfTest;
+
+          interface Iface {
+              public function action(): bool;
+          }
+
+          class Repo implements Iface {
+              public function existing(): void {}
+              public function brandNewMethod(string $arg): bool { return true; }
+              public function action(): bool { return false; }
+              public string $newProp = '';
+
+              /**
+               * @internal
+               */
+              public function alreadyInternal(): void {}
+          }
+          EOF
+          git add -A
+          git commit -q -m head
+
+      - name: "Run action against scenario"
+        uses: ./
+        with:
+          base-ref: HEAD~1
+          working-directory: scenario
+          paths: 'src/**/*.php'
+          source-roots: 'src'
+          show-modified: 'false'
+          show-removed: 'true'
+
+      - name: "Assert expected output"
+        run: |
+          set -euo pipefail
+          body="scenario/api-surface-result/comment-body.txt"
+          if [[ ! -s "$body" ]]; then
+              echo "Comment body is empty or missing — expected new method, new property, removed method." >&2
+              exit 1
+          fi
+
+          echo "=== comment body ==="
+          cat "$body"
+          echo "===================="
+
+          fail=0
+          must_contain() {
+              if ! grep -qF "$1" "$body"; then
+                  echo "MISSING: $1" >&2
+                  fail=1
+              fi
+          }
+          must_not_contain() {
+              if grep -qF "$1" "$body"; then
+                  echo "UNEXPECTED: $1" >&2
+                  fail=1
+              fi
+          }
+
+          # Brand-new method on existing class — should be reported.
+          must_contain 'SelfTest\Repo::brandNewMethod'
+          must_contain 'public function brandNewMethod(string $arg): bool'
+
+          # New property on existing class — should be reported.
+          must_contain 'SelfTest\Repo::newProp'
+          must_contain '#### Properties'
+
+          # Method that just implements an existing interface — must NOT appear.
+          must_not_contain 'SelfTest\Repo::action'
+
+          # Removed method — should be in Removed section.
+          must_contain '### Removed API Surface'
+          must_contain 'SelfTest\Repo::willBeRemoved'
+
+          # @internal additions are excluded by default.
+          must_not_contain 'alreadyInternal'
+
+          if [[ "$fail" -ne 0 ]]; then
+              echo "Smoke test assertions failed." >&2
+              exit 1
+          fi
+          echo "Smoke test passed."
