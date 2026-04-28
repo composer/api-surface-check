@@ -1,4 +1,4 @@
-name: 'API Surface Check'
+name: 'API Surface Check for PHP'
 description: 'Detect public API surface changes (added, removed, modified symbols) in a pull request via static reflection.'
 author: 'Composer'
 branding:
