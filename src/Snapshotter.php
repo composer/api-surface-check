@@ -5,6 +5,15 @@ declare(strict_types=1);
 namespace Composer\ApiSurfaceCheck;
 
 use PhpParser\Node\Expr;
+use PhpParser\Node\Stmt\Class_;
+use PhpParser\Node\Stmt\Enum_;
+use PhpParser\Node\Stmt\Interface_;
+use PhpParser\Node\Stmt\Trait_;
+use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\Parser;
+use PhpParser\ParserFactory;
 use PhpParser\PrettyPrinter\Standard as PrettyPrinter;
 use Roave\BetterReflection\BetterReflection;
 use Roave\BetterReflection\Reflection\ReflectionClass;
@@ -18,6 +27,7 @@ use Roave\BetterReflection\Reflection\ReflectionProperty;
 use Roave\BetterReflection\Reflection\ReflectionType;
 use Roave\BetterReflection\Reflection\ReflectionUnionType;
 use Roave\BetterReflection\Reflector\DefaultReflector;
+use Roave\BetterReflection\Reflector\Exception\IdentifierNotFound;
 use Roave\BetterReflection\Reflector\Reflector;
 use Roave\BetterReflection\SourceLocator\Type\AggregateSourceLocator;
 use Roave\BetterReflection\SourceLocator\Type\DirectoriesSourceLocator;
@@ -34,6 +44,7 @@ use Roave\BetterReflection\SourceLocator\Type\PhpInternalSourceLocator;
 final class Snapshotter
 {
     private PrettyPrinter $prettyPrinter;
+    private Parser $parser;
 
     /**
      * @param list<string> $sourceRoots Directories used to resolve parent classes / interfaces.
@@ -41,6 +52,7 @@ final class Snapshotter
     public function __construct(private array $sourceRoots)
     {
         $this->prettyPrinter = new PrettyPrinter();
+        $this->parser = (new ParserFactory())->createForHostVersion();
     }
 
     /**
@@ -64,22 +76,29 @@ final class Snapshotter
         $reflector = $this->buildReflector();
         $records = [];
 
-        foreach ($reflector->reflectAllClasses() as $class) {
-            $fileName = $class->getFileName();
-            if ($fileName === null) {
-                continue;
-            }
-            $abs = realpath($fileName);
-            if ($abs === false || !isset($targetFiles[$abs])) {
-                continue;
-            }
+        // Enumerate target classes by parsing each target file directly with
+        // PhpParser, then resolving each FQCN through better-reflection. We
+        // deliberately avoid $reflector->reflectAllClasses(): that would force
+        // the source locators to recursively parse every PHP file in every
+        // source root (including vendor/ when install-dependencies is on),
+        // which can take many minutes on real-world projects. With per-file
+        // enumeration the upfront cost is bounded by the number of changed
+        // files; vendor is only touched lazily during parent resolution.
+        foreach ($targetFiles as $abs => $relative) {
+            foreach ($this->extractClassFqcns($abs) as $fqcn) {
+                try {
+                    $class = $reflector->reflectClass($fqcn);
+                } catch (IdentifierNotFound) {
+                    continue;
+                }
 
-            if ($class->isAnonymous()) {
-                continue;
-            }
+                if ($class->isAnonymous()) {
+                    continue;
+                }
 
-            foreach ($this->collectFromClass($class, $targetFiles[$abs]) as $record) {
-                $records[] = $record;
+                foreach ($this->collectFromClass($class, $relative) as $record) {
+                    $records[] = $record;
+                }
             }
         }
 
@@ -89,6 +108,46 @@ final class Snapshotter
         });
 
         return $records;
+    }
+
+    /**
+     * @return list<string> Fully-qualified names of named classes/interfaces/traits/enums declared in the file.
+     */
+    private function extractClassFqcns(string $absPath): array
+    {
+        $code = @file_get_contents($absPath);
+        if ($code === false) {
+            return [];
+        }
+
+        $ast = $this->parser->parse($code);
+        if ($ast === null) {
+            return [];
+        }
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new NameResolver());
+        $ast = $traverser->traverse($ast);
+
+        $nodes = (new NodeFinder())->find(
+            $ast,
+            static fn ($node): bool =>
+                $node instanceof Class_
+                || $node instanceof Interface_
+                || $node instanceof Trait_
+                || $node instanceof Enum_,
+        );
+
+        $fqcns = [];
+        foreach ($nodes as $node) {
+            $name = $node->namespacedName ?? null;
+            if ($name === null) {
+                continue;
+            }
+            $fqcns[] = $name->toString();
+        }
+
+        return $fqcns;
     }
 
     private function buildReflector(): Reflector

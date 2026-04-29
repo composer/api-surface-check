@@ -123,7 +123,7 @@ runs:
       if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: composer install --no-dev --no-interaction --no-progress --classmap-authoritative
+      run: composer install --no-dev --no-interaction --no-progress
 
     - name: Install project dependencies
       id: project-deps
