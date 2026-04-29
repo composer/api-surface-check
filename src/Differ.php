@@ -30,6 +30,8 @@ final class Differ
      *     show-modified?: bool,
      *     comment-marker?: string,
      *     heading?: string,
+     *     repo?: string,
+     *     pr-number?: int|string,
      * } $options
      */
     public function __construct(private array $options = [])
@@ -70,13 +72,13 @@ final class Differ
 
         $body = '';
         if (!empty($added)) {
-            $body .= self::renderSection('New API Surface', $added);
+            $body .= $this->renderSection('New API Surface', $added, side: 'R');
         }
         if ($showRemoved && !empty($removed)) {
-            $body .= self::renderSection('Removed API Surface', $removed);
+            $body .= $this->renderSection('Removed API Surface', $removed, side: 'L');
         }
         if ($showModified && !empty($modified)) {
-            $body .= self::renderModifiedSection($modified);
+            $body .= $this->renderModifiedSection($modified);
         }
 
         if ($body === '') {
@@ -136,7 +138,7 @@ final class Differ
     /**
      * @param list<array<string,mixed>> $records
      */
-    private static function renderSection(string $title, array $records): string
+    private function renderSection(string $title, array $records, string $side): string
     {
         $byKind = [];
         foreach ($records as $r) {
@@ -149,26 +151,31 @@ final class Differ
             }
             $out .= "\n#### " . self::KIND_LABELS[$kind] . "\n";
             foreach ($byKind[$kind] as $r) {
-                $out .= self::renderRecord($r) . "\n";
+                $out .= $this->renderRecord($r, $side) . "\n";
             }
         }
         return $out . "\n";
     }
 
-    private static function renderRecord(array $record): string
+    private function renderRecord(array $record, string $side): string
     {
-        $loc = '`' . $record['file'] . ':' . $record['line'] . '`';
-        if ($record['member'] !== null) {
-            $label = $record['fqcn'] . '::' . $record['member'];
-            return "- `{$label}` — `" . trim($record['signature']) . '` in ' . $loc;
+        $label = $record['member'] !== null
+            ? $record['fqcn'] . '::' . $record['member']
+            : $record['fqcn'];
+
+        $head = $this->formatLabel($label, $record['file'], (int) $record['line'], $side);
+        $sig = trim($record['signature']);
+        $line = '- ' . $head . ' — `' . $sig . '`';
+        if (!$this->hasRepoLink()) {
+            $line .= ' in `' . $record['file'] . ':' . $record['line'] . '`';
         }
-        return "- `" . trim($record['signature']) . '` in ' . $loc;
+        return $line;
     }
 
     /**
      * @param list<array{head: array<string,mixed>, base: array<string,mixed>}> $changes
      */
-    private static function renderModifiedSection(array $changes): string
+    private function renderModifiedSection(array $changes): string
     {
         $byKind = [];
         foreach ($changes as $c) {
@@ -184,11 +191,109 @@ final class Differ
                 $h = $c['head'];
                 $b = $c['base'];
                 $label = $h['member'] !== null ? ($h['fqcn'] . '::' . $h['member']) : $h['fqcn'];
-                $out .= "- `{$label}` in `" . $h['file'] . ':' . $h['line'] . "`\n";
-                $out .= "  - was: `" . trim($b['signature']) . "`\n";
-                $out .= "  - now: `" . trim($h['signature']) . "`\n";
+
+                $head = $this->formatLabel($label, $h['file'], (int) $h['line'], 'R');
+                $line = '- ' . $head;
+                if (!$this->hasRepoLink()) {
+                    $line .= ' in `' . $h['file'] . ':' . $h['line'] . '`';
+                }
+                $out .= $line . "\n";
+                $out .= self::renderSignatureDiff(
+                    self::sourceFor($b),
+                    self::sourceFor($h),
+                ) . "\n";
             }
         }
         return $out . "\n";
+    }
+
+    private function hasRepoLink(): bool
+    {
+        return !empty($this->options['repo']) && !empty($this->options['pr-number']);
+    }
+
+    private function formatLabel(string $label, string $file, int $line, string $side): string
+    {
+        if (!$this->hasRepoLink()) {
+            return '`' . $label . '`';
+        }
+        $url = sprintf(
+            'https://github.com/%s/pull/%s/files#diff-%s%s%d',
+            $this->options['repo'],
+            $this->options['pr-number'],
+            hash('sha256', $file),
+            $side,
+            $line,
+        );
+        return '[`' . $label . '`](' . $url . ')';
+    }
+
+    private static function sourceFor(array $record): string
+    {
+        if (!empty($record['signature_source'])) {
+            return rtrim($record['signature_source']);
+        }
+        return rtrim($record['signature']);
+    }
+
+    /**
+     * Render the was → now diff. For short snippets (≤ 5 lines on both sides),
+     * emit the full was prefixed by `-` and now by `+` inside a ```diff fence.
+     * For longer snippets, emit a unified diff (only changed hunks) via `diff -u`.
+     */
+    private static function renderSignatureDiff(string $was, string $now): string
+    {
+        $wasLines = explode("\n", $was);
+        $nowLines = explode("\n", $now);
+
+        if (count($wasLines) <= 5 && count($nowLines) <= 5) {
+            $body = '';
+            foreach ($wasLines as $l) {
+                $body .= '- ' . $l . "\n";
+            }
+            foreach ($nowLines as $l) {
+                $body .= '+ ' . $l . "\n";
+            }
+            return "  ```diff\n" . self::indentBlock($body) . "  ```";
+        }
+
+        $diff = self::computeUnifiedDiff($was, $now);
+        return "  ```diff\n" . self::indentBlock($diff) . "  ```";
+    }
+
+    private static function computeUnifiedDiff(string $was, string $now): string
+    {
+        $wasFile = tempnam(sys_get_temp_dir(), 'asc_was_');
+        $nowFile = tempnam(sys_get_temp_dir(), 'asc_now_');
+        try {
+            file_put_contents($wasFile, $was . "\n");
+            file_put_contents($nowFile, $now . "\n");
+            $cmd = sprintf(
+                'diff -U1 --label was --label now %s %s',
+                escapeshellarg($wasFile),
+                escapeshellarg($nowFile),
+            );
+            $out = shell_exec($cmd) ?? '';
+        } finally {
+            @unlink($wasFile);
+            @unlink($nowFile);
+        }
+
+        // Strip the file headers (--- was / +++ now) — the @@ hunks are what's useful.
+        $lines = explode("\n", rtrim($out, "\n"));
+        $kept = [];
+        foreach ($lines as $line) {
+            if (str_starts_with($line, '--- ') || str_starts_with($line, '+++ ')) {
+                continue;
+            }
+            $kept[] = $line;
+        }
+        return implode("\n", $kept) . "\n";
+    }
+
+    private static function indentBlock(string $block): string
+    {
+        $lines = explode("\n", rtrim($block, "\n"));
+        return implode("\n", array_map(static fn (string $l) => '  ' . $l, $lines)) . "\n";
     }
 }

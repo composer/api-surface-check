@@ -92,6 +92,7 @@ final class Snapshotter
         // enumeration the upfront cost is bounded by the number of changed
         // files; vendor is only touched lazily during parent resolution.
         foreach ($targetFiles as $abs => $relative) {
+            $fileLines = self::readFileLines($abs);
             foreach ($this->extractClassFqcns($abs) as $fqcn) {
                 try {
                     $class = $reflector->reflectClass($fqcn);
@@ -103,7 +104,7 @@ final class Snapshotter
                     continue;
                 }
 
-                foreach ($this->collectFromClass($class, $relative) as $record) {
+                foreach ($this->collectFromClass($class, $relative, $fileLines) as $record) {
                     $records[] = $record;
                 }
             }
@@ -204,9 +205,10 @@ final class Snapshotter
     }
 
     /**
+     * @param list<string> $fileLines Source file split by line (0-indexed array, but file lines are 1-indexed).
      * @return iterable<array<string,mixed>>
      */
-    private function collectFromClass(ReflectionClass $class, string $relativeFile): iterable
+    private function collectFromClass(ReflectionClass $class, string $relativeFile, array $fileLines): iterable
     {
         $classInternal = self::isInternalDoc($class->getDocComment());
         $kind = self::classKind($class);
@@ -229,6 +231,7 @@ final class Snapshotter
             'line' => $class->getStartLine(),
             'signature' => $classSignature,
             'signature_hash' => hash('sha256', $classSignature),
+            'signature_source' => self::extractDeclarationSource($fileLines, $class->getStartLine(), $class->getEndLine(), stripBody: true),
         ];
 
         foreach ($class->getImmediateMethods() as $method) {
@@ -247,6 +250,7 @@ final class Snapshotter
                 'line' => $method->getStartLine(),
                 'signature' => $signature,
                 'signature_hash' => hash('sha256', $signature),
+                'signature_source' => self::extractDeclarationSource($fileLines, $method->getStartLine(), $method->getEndLine(), stripBody: !$method->isAbstract()),
             ];
         }
 
@@ -266,6 +270,7 @@ final class Snapshotter
                 'line' => $constant->getStartLine(),
                 'signature' => $signature,
                 'signature_hash' => hash('sha256', $signature),
+                'signature_source' => self::extractDeclarationSource($fileLines, $constant->getStartLine(), $constant->getEndLine(), stripBody: false),
             ];
         }
 
@@ -285,8 +290,73 @@ final class Snapshotter
                 'line' => $property->getStartLine(),
                 'signature' => $signature,
                 'signature_hash' => hash('sha256', $signature),
+                'signature_source' => self::extractDeclarationSource($fileLines, $property->getStartLine(), $property->getEndLine(), stripBody: false),
             ];
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function readFileLines(string $absPath): array
+    {
+        $content = @file_get_contents($absPath);
+        if ($content === false) {
+            return [];
+        }
+        return explode("\n", $content);
+    }
+
+    /**
+     * Slice the source between $startLine and $endLine (1-based inclusive). When $stripBody is true,
+     * truncate the slice at the opening `{` of the body — found by scanning forward from after the
+     * declaration's closing `)` at depth 0. Falls back to the un-truncated slice if no balanced `{` is found.
+     *
+     * Indentation of the first line is removed from every line so the snippet renders without leading dead space.
+     *
+     * @param list<string> $fileLines
+     */
+    private static function extractDeclarationSource(array $fileLines, int $startLine, int $endLine, bool $stripBody): string
+    {
+        if ($startLine < 1 || $endLine < $startLine || $startLine > count($fileLines)) {
+            return '';
+        }
+        $slice = array_slice($fileLines, $startLine - 1, $endLine - $startLine + 1);
+        $source = implode("\n", $slice);
+
+        if ($stripBody) {
+            $depth = 0;
+            $sawCloseParen = false;
+            $len = strlen($source);
+            for ($i = 0; $i < $len; $i++) {
+                $ch = $source[$i];
+                if ($ch === '(') {
+                    $depth++;
+                } elseif ($ch === ')') {
+                    $depth--;
+                    if ($depth === 0) {
+                        $sawCloseParen = true;
+                    }
+                } elseif ($ch === '{' && $depth === 0 && $sawCloseParen) {
+                    $source = rtrim(substr($source, 0, $i));
+                    break;
+                }
+            }
+        }
+
+        // Dedent: leading whitespace common to first non-empty line.
+        if (preg_match('/^([ \t]+)/', $source, $m) === 1) {
+            $indent = $m[1];
+            $lines = explode("\n", $source);
+            foreach ($lines as $i => $line) {
+                if (str_starts_with($line, $indent)) {
+                    $lines[$i] = substr($line, strlen($indent));
+                }
+            }
+            $source = implode("\n", $lines);
+        }
+
+        return rtrim($source);
     }
 
     public static function isInternalDoc(?string $doc): bool

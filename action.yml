@@ -167,6 +167,7 @@ runs:
         SHOW_MODIFIED: ${{ inputs.show-modified }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         HEADING: ${{ inputs.heading }}
+        PR_NUMBER: ${{ steps.pr.outputs.number }}
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/scripts/detect.sh"
 

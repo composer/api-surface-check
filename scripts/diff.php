@@ -34,6 +34,8 @@ $differ = new Differ([
     'show-modified' => $opts['show-modified'],
     'comment-marker' => $opts['comment-marker'],
     'heading' => $opts['heading'],
+    'repo' => $opts['repo'],
+    'pr-number' => $opts['pr-number'],
 ]);
 
 file_put_contents($opts['output'], $differ->diff($head, $base));
@@ -51,6 +53,8 @@ function parseArgs(array $argv): array
         'show-modified' => false,
         'comment-marker' => '<!-- api-surface-bot -->',
         'heading' => '## API Surface Changes',
+        'repo' => null,
+        'pr-number' => null,
     ];
     foreach (array_slice($argv, 1) as $arg) {
         if (str_starts_with($arg, '--head=')) {
@@ -75,6 +79,12 @@ function parseArgs(array $argv): array
             $opts['comment-marker'] = substr($arg, 17);
         } elseif (str_starts_with($arg, '--heading=')) {
             $opts['heading'] = substr($arg, 10);
+        } elseif (str_starts_with($arg, '--repo=')) {
+            $value = substr($arg, 7);
+            $opts['repo'] = $value !== '' ? $value : null;
+        } elseif (str_starts_with($arg, '--pr-number=')) {
+            $value = substr($arg, 12);
+            $opts['pr-number'] = $value !== '' ? $value : null;
         }
     }
     foreach (['head', 'base', 'output'] as $required) {

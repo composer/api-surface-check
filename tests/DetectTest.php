@@ -233,8 +233,9 @@ final class DetectTest extends TestCase
         $body = $this->runDetect();
         $this->assertStringContainsString('### Modified API Surface', $body);
         $this->assertStringContainsString('L\\Foo::mut', $body);
-        $this->assertStringContainsString('was: `public function mut(int $x): void`', $body);
-        $this->assertStringContainsString('now: `public function mut(int $x, int $y): void`', $body);
+        $this->assertStringContainsString("```diff", $body);
+        $this->assertStringContainsString('- public function mut(int $x): void', $body);
+        $this->assertStringContainsString('+ public function mut(int $x, int $y): void', $body);
 
         // Explicit opt-out → empty body.
         $this->assertSame('', $this->runDetect(['SHOW_MODIFIED' => 'false']));

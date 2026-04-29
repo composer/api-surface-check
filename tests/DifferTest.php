@@ -106,8 +106,9 @@ final class DifferTest extends TestCase
 
         $bodyOn = (new Differ(['show-modified' => true]))->diff($head, $base);
         $this->assertStringContainsString('### Modified API Surface', $bodyOn);
-        $this->assertStringContainsString('was: `public function mut(): void`', $bodyOn);
-        $this->assertStringContainsString('now: `public function mut(int $x): void`', $bodyOn);
+        $this->assertStringContainsString("```diff", $bodyOn);
+        $this->assertStringContainsString('- public function mut(): void', $bodyOn);
+        $this->assertStringContainsString('+ public function mut(int $x): void', $bodyOn);
     }
 
     public function testInternalSymbolFilteredByDefault(): void
@@ -197,5 +198,59 @@ final class DifferTest extends TestCase
         $this->assertStringContainsString('#### Properties', $body);
         $this->assertStringContainsString('Foo\\Bar::newProp', $body);
         $this->assertStringContainsString('public string $newProp', $body);
+    }
+
+    public function testRepoAndPrNumberLinkifySymbolHeader(): void
+    {
+        $rec = self::record('method', 'Foo\\Bar', 'newMethod', signature: 'public function newMethod(): void', file: 'src/Foo/Bar.php', line: 42);
+        $differ = new Differ([
+            'repo' => 'acme/proj',
+            'pr-number' => 7,
+        ]);
+        $body = $differ->diff([self::record('class', 'Foo\\Bar'), $rec], [self::record('class', 'Foo\\Bar')]);
+
+        $expectedHash = hash('sha256', 'src/Foo/Bar.php');
+        $expectedUrl = "https://github.com/acme/proj/pull/7/files#diff-{$expectedHash}R42";
+        $this->assertStringContainsString("[`Foo\\Bar::newMethod`]({$expectedUrl})", $body);
+        // No trailing path when linkified.
+        $this->assertStringNotContainsString('in `src/Foo/Bar.php:42`', $body);
+    }
+
+    public function testRemovedRecordsLinkUseLeftSideAnchor(): void
+    {
+        $differ = new Differ([
+            'repo' => 'acme/proj',
+            'pr-number' => 7,
+        ]);
+        $body = $differ->diff(
+            [],
+            [self::record('method', 'Foo\\Bar', 'gone', signature: 'public function gone(): void', file: 'src/Foo/Bar.php', line: 11)],
+        );
+
+        $expectedHash = hash('sha256', 'src/Foo/Bar.php');
+        $this->assertStringContainsString("#diff-{$expectedHash}L11", $body);
+    }
+
+    public function testLongSignatureModificationUsesUnifiedDiff(): void
+    {
+        $longWas = "public function foo(\n    int \$a,\n    int \$b,\n    int \$c,\n    int \$d,\n    int \$e,\n): void";
+        $longNow = "public function foo(\n    int \$a,\n    int \$b,\n    int \$c,\n    int \$d,\n    int \$e,\n    int \$f,\n): void";
+
+        $head = [self::recordWithSource('method', 'Foo\\Bar', 'foo', $longNow, 'h2')];
+        $base = [self::recordWithSource('method', 'Foo\\Bar', 'foo', $longWas, 'h1')];
+
+        $body = (new Differ(['show-modified' => true]))->diff($head, $base);
+
+        // Unified diff format includes @@ hunk markers.
+        $this->assertStringContainsString('@@', $body);
+        $this->assertStringContainsString('+    int $f,', $body);
+    }
+
+    /** @return array<string,mixed> */
+    private static function recordWithSource(string $type, string $fqcn, string $member, string $source, string $hash): array
+    {
+        $r = self::record($type, $fqcn, $member, signature: $source, hash: $hash);
+        $r['signature_source'] = $source;
+        return $r;
     }
 }

@@ -120,6 +120,12 @@ diff_args=(
 if [[ "${INCLUDE_INTERNAL}" == "true" ]]; then
     diff_args+=("--include-internal=true")
 fi
+if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    diff_args+=("--repo=${GITHUB_REPOSITORY}")
+fi
+if [[ -n "${PR_NUMBER:-}" ]]; then
+    diff_args+=("--pr-number=${PR_NUMBER}")
+fi
 
 php "${SCRIPT_DIR}/diff.php" "${diff_args[@]}"
 
