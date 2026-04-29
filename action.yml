@@ -96,7 +96,9 @@ runs:
     - name: Fetch base ref
       if: steps.pr.outputs.number
       shell: bash
-      run: git fetch --no-tags --depth=1 origin "${{ steps.pr.outputs.base-ref }}:refs/remotes/origin/${{ steps.pr.outputs.base-ref }}"
+      env:
+        BASE_REF: ${{ steps.pr.outputs.base-ref }}
+      run: git fetch --no-tags --depth=1 origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
     - name: Preflight scan
       id: preflight
@@ -107,8 +109,9 @@ runs:
         BASE_REF: origin/${{ steps.pr.outputs.base-ref }}
         PATHS_GLOB: ${{ inputs.paths }}
         OUTPUT_FILE: api-surface-preflight.txt
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        bash ${{ github.action_path }}/scripts/preflight.sh
+        bash "${ACTION_PATH}/scripts/preflight.sh"
         echo "should-run=$(cat api-surface-preflight.txt)" >> "$GITHUB_OUTPUT"
 
     - name: Setup PHP
@@ -143,7 +146,7 @@ runs:
           exit 0
         fi
         if [[ -d vendor ]]; then
-          echo "vendor-path=$(cd vendor && pwd)" >> "$GITHUB_OUTPUT"
+          echo "project-path=$(pwd)" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Run analysis
@@ -155,7 +158,7 @@ runs:
         BASE_REF: origin/${{ steps.pr.outputs.base-ref }}
         PATHS_GLOB: ${{ inputs.paths }}
         SOURCE_ROOTS: ${{ inputs.source-roots }}
-        VENDOR_PATH: ${{ steps.project-deps.outputs.vendor-path }}
+        COMPOSER_PROJECT_PATH: ${{ steps.project-deps.outputs.project-path }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         INCLUDE_INTERNAL: ${{ inputs.include-internal }}
         TYPES: ${{ inputs.types }}
@@ -164,7 +167,8 @@ runs:
         SHOW_MODIFIED: ${{ inputs.show-modified }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         HEADING: ${{ inputs.heading }}
-      run: bash ${{ github.action_path }}/scripts/detect.sh
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "${ACTION_PATH}/scripts/detect.sh"
 
     # Always run post-comment when we have a PR. With analysis skipped,
     # comment-body.txt is missing/empty and post-comment deletes any
@@ -177,4 +181,5 @@ runs:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         PR_NUMBER: ${{ steps.pr.outputs.number }}
-      run: bash ${{ github.action_path }}/scripts/post-comment.sh
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "${ACTION_PATH}/scripts/post-comment.sh"

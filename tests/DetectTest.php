@@ -139,7 +139,8 @@ final class DetectTest extends TestCase
         ], 'implement Iface on Repo');
 
         $body = $this->runDetect();
-        $this->assertSame('', $body, 'Interface implementations should not be reported as new API surface.');
+        $this->assertStringNotContainsString('### New API Surface', $body, 'Interface implementations should not be reported as new API surface.');
+        $this->assertStringNotContainsString('L\\Repo::action', $body);
     }
 
     public function testRemovedPublicMethodIsReported(): void
@@ -219,7 +220,7 @@ final class DetectTest extends TestCase
         $this->assertStringContainsString('L\\Foo::impl', $body);
     }
 
-    public function testModifiedSignatureRequiresFlag(): void
+    public function testModifiedSignatureFlag(): void
     {
         $this->commit([
             'src/Foo.php' => "<?php\nnamespace L;\nclass Foo {\n    public function mut(int \$x): void {}\n}\n",
@@ -228,15 +229,15 @@ final class DetectTest extends TestCase
             'src/Foo.php' => "<?php\nnamespace L;\nclass Foo {\n    public function mut(int \$x, int \$y): void {}\n}\n",
         ], 'add param');
 
-        // Default (show-modified=false) → empty body.
-        $this->assertSame('', $this->runDetect());
-
-        // With the flag → reported under Modified.
-        $body = $this->runDetect(['SHOW_MODIFIED' => 'true']);
+        // Default → reported under Modified.
+        $body = $this->runDetect();
         $this->assertStringContainsString('### Modified API Surface', $body);
         $this->assertStringContainsString('L\\Foo::mut', $body);
         $this->assertStringContainsString('was: `public function mut(int $x): void`', $body);
         $this->assertStringContainsString('now: `public function mut(int $x, int $y): void`', $body);
+
+        // Explicit opt-out → empty body.
+        $this->assertSame('', $this->runDetect(['SHOW_MODIFIED' => 'false']));
     }
 
     public function testVendorParentMethodIsNotReportedWhenVendorPathIsProvided(): void

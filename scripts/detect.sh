@@ -17,7 +17,7 @@ INCLUDE_INTERNAL="${INCLUDE_INTERNAL:-false}"
 TYPES="${TYPES:-class,interface,trait,enum,method,property,constant}"
 VISIBILITY="${VISIBILITY:-public,protected}"
 SHOW_REMOVED="${SHOW_REMOVED:-true}"
-SHOW_MODIFIED="${SHOW_MODIFIED:-false}"
+SHOW_MODIFIED="${SHOW_MODIFIED:-true}"
 COMMENT_MARKER="${COMMENT_MARKER:-<!-- api-surface-bot -->}"
 HEADING="${HEADING:-## API Surface Changes}"
 
@@ -58,16 +58,26 @@ fi
 echo "Analyzing ${#changed_files[@]} changed file(s)."
 files_csv=$(IFS=','; echo "${changed_files[*]}")
 
-# When install-dependencies is on, the action exports VENDOR_PATH as an
-# absolute path to the project's vendor/. We append it to the source roots so
-# better-reflection can walk through into vendor parents on both HEAD and BASE
-# snapshots (BASE uses HEAD's vendor since dependencies aren't in git).
+# When install-dependencies is on, the action exports COMPOSER_PROJECT_PATH
+# pointing at a directory containing composer.json + vendor/composer/installed.json.
+# Snapshotter then resolves vendor parents through composer's PSR-4 mappings
+# (O(1) per FQCN) instead of recursive directory walks.
+#
+# VENDOR_PATH is supported as a fallback for environments / tests where vendor/
+# is laid out without a real composer.json — it appends the directory to the
+# source roots so DirectoriesSourceLocator can find classes (slow on real
+# vendor trees; intended for synthetic fixtures).
 roots_for_snapshot=("${roots_array[@]}")
 if [[ -n "${VENDOR_PATH:-}" && -d "${VENDOR_PATH}" ]]; then
     roots_for_snapshot+=("${VENDOR_PATH}")
     echo "Including vendor path for resolution: ${VENDOR_PATH}"
 fi
 roots_csv=$(IFS=','; echo "${roots_for_snapshot[*]}")
+composer_arg=()
+if [[ -n "${COMPOSER_PROJECT_PATH:-}" && -d "${COMPOSER_PROJECT_PATH}" ]]; then
+    composer_arg=("--composer-path=${COMPOSER_PROJECT_PATH}")
+    echo "Using composer project path for vendor resolution: ${COMPOSER_PROJECT_PATH}"
+fi
 
 # Extract BASE source for parent/interface resolution and BASE-side reflection.
 base_tree="${OUTPUT_DIR}/.base-tree"
@@ -82,7 +92,8 @@ git archive "${BASE_REF}" -- "${roots_array[@]}" 2>/dev/null | tar -x -C "${base
 php "${SCRIPT_DIR}/snapshot.php" \
     --files="${files_csv}" \
     --roots="${roots_csv}" \
-    --output="${OUTPUT_DIR}/head-snapshot.json"
+    --output="${OUTPUT_DIR}/head-snapshot.json" \
+    "${composer_arg[@]}"
 
 # BASE snapshot — run from base-tree so relative paths match.
 (
@@ -90,7 +101,8 @@ php "${SCRIPT_DIR}/snapshot.php" \
     php "${SCRIPT_DIR}/snapshot.php" \
         --files="${files_csv}" \
         --roots="${roots_csv}" \
-        --output="${OLDPWD}/${OUTPUT_DIR}/base-snapshot.json"
+        --output="${OLDPWD}/${OUTPUT_DIR}/base-snapshot.json" \
+        "${composer_arg[@]}"
 )
 
 # Diff

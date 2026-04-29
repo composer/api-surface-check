@@ -78,7 +78,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  comment:
+  check-api-surface:
     runs-on: ubuntu-latest
     steps:
       - uses: composer/api-surface-check@main

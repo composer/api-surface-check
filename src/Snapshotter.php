@@ -30,8 +30,13 @@ use Roave\BetterReflection\Reflector\DefaultReflector;
 use Roave\BetterReflection\Reflector\Exception\IdentifierNotFound;
 use Roave\BetterReflection\Reflector\Reflector;
 use Roave\BetterReflection\SourceLocator\Type\AggregateSourceLocator;
+use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\Exception\MissingComposerJson;
+use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\Exception\MissingInstalledJson;
+use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\MakeLocatorForComposerJsonAndInstalledJson;
 use Roave\BetterReflection\SourceLocator\Type\DirectoriesSourceLocator;
+use Roave\BetterReflection\SourceLocator\Type\MemoizingSourceLocator;
 use Roave\BetterReflection\SourceLocator\Type\PhpInternalSourceLocator;
+use Roave\BetterReflection\SourceLocator\Type\SingleFileSourceLocator;
 
 /**
  * Builds an array of API-surface symbol records for a set of files.
@@ -47,9 +52,11 @@ final class Snapshotter
     private Parser $parser;
 
     /**
-     * @param list<string> $sourceRoots Directories used to resolve parent classes / interfaces.
+     * @param list<string> $sourceRoots         Directories used to resolve parent classes / interfaces.
+     * @param string|null  $composerProjectPath Optional project root with composer.json + vendor/composer/installed.json. When set, parent / interface
+     *                                          lookups go through composer's PSR-4 mappings (O(1) per FQCN) instead of recursive directory scans.
      */
-    public function __construct(private array $sourceRoots)
+    public function __construct(private array $sourceRoots, private ?string $composerProjectPath = null)
     {
         $this->prettyPrinter = new PrettyPrinter();
         $this->parser = (new ParserFactory())->createForHostVersion();
@@ -73,7 +80,7 @@ final class Snapshotter
             return [];
         }
 
-        $reflector = $this->buildReflector();
+        $reflector = $this->buildReflector(array_keys($targetFiles));
         $records = [];
 
         // Enumerate target classes by parsing each target file directly with
@@ -150,13 +157,39 @@ final class Snapshotter
         return $fqcns;
     }
 
-    private function buildReflector(): Reflector
+    /**
+     * @param list<string> $targetAbsPaths Absolute paths of files we'll be snapshotting (added at the front of the
+     *                                     aggregate so target FQCN lookups don't fall through to vendor / src walks).
+     */
+    private function buildReflector(array $targetAbsPaths): Reflector
     {
         $br = new BetterReflection();
         $astLocator = $br->astLocator();
         $stubber = $br->sourceStubber();
 
         $locators = [];
+
+        // Target files first: lookups for classes declared in changed files
+        // resolve in O(1) without falling through to the slower DirectoriesSourceLocator.
+        foreach ($targetAbsPaths as $abs) {
+            if (is_file($abs)) {
+                $locators[] = new SingleFileSourceLocator($abs, $astLocator);
+            }
+        }
+
+        // Composer-aware locator: when a project with composer.json + installed.json
+        // is provided, all parent / interface lookups under PSR-4 / PSR-0 namespaces
+        // resolve in O(1) via prefix mapping. Without this, parent resolution into
+        // vendor walks every file (~thousands of file reads + AST parses per FQCN
+        // miss) — the dominant cost on real-world projects.
+        if ($this->composerProjectPath !== null && is_dir($this->composerProjectPath)) {
+            try {
+                $locators[] = (new MakeLocatorForComposerJsonAndInstalledJson())($this->composerProjectPath, $astLocator);
+            } catch (MissingComposerJson | MissingInstalledJson) {
+                // Fall through to source-roots only.
+            }
+        }
+
         foreach ($this->sourceRoots as $root) {
             if (is_dir($root)) {
                 $locators[] = new DirectoriesSourceLocator([$root], $astLocator);
@@ -164,7 +197,10 @@ final class Snapshotter
         }
         $locators[] = new PhpInternalSourceLocator($astLocator, $stubber);
 
-        return new DefaultReflector(new AggregateSourceLocator($locators));
+        // Memoize by FQCN: any parent / interface looked up more than once
+        // (which happens for every method / constant / property check on
+        // a class) reuses the cached result instead of re-walking locators.
+        return new DefaultReflector(new MemoizingSourceLocator(new AggregateSourceLocator($locators)));
     }
 
     /**
