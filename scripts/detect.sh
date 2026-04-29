@@ -40,7 +40,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 # All files in scope (added, modified, or deleted) — snapshot.php will silently
 # ignore missing files, so we can pass the same list for both refs.
-mapfile -t changed_files < <(git diff "${BASE_REF}...HEAD" --diff-filter=AMD --name-only -- "${paths_array[@]}" || true)
+mapfile -t changed_files < <(git diff "${BASE_REF}..HEAD" --diff-filter=AMD --name-only -- "${paths_array[@]}" || true)
 
 # Filter out empty entries
 changed_files=("${changed_files[@]/#/}")

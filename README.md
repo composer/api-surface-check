@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: composer/api-surface-check@main
         with:
-          # install-dependencies: true
+          # install-dependencies: false
           # paths: src/**/*.php
           # source-roots: src
           # include-internal: false

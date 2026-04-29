@@ -16,6 +16,7 @@
     "autoload-dev": {
         "psr-4": {
             "Composer\\ApiSurfaceCheck\\Tests\\": "tests/"
-        }
+        },
+        "exclude-from-classmap": ["tests/fixtures/"]
     }
 }

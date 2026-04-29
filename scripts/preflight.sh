@@ -29,7 +29,7 @@ done
 
 mkdir -p "$(dirname "${OUTPUT_FILE}")"
 
-diff_output=$(git diff "${BASE_REF}...HEAD" --unified=0 -- "${paths_array[@]}" 2>/dev/null || true)
+diff_output=$(git diff "${BASE_REF}..HEAD" --unified=0 -- "${paths_array[@]}" 2>/dev/null || true)
 
 if [[ -z "${diff_output}" ]]; then
     echo "false" > "${OUTPUT_FILE}"
