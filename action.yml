@@ -113,7 +113,7 @@ runs:
 
     - name: Run analysis
       if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
-      uses: composer/api-surface-check/analyze@${{ github.action_ref }}
+      uses: ./analyze
       with:
         base-ref: origin/${{ steps.pr.outputs.base-ref }}
         paths: ${{ inputs.paths }}
@@ -135,7 +135,7 @@ runs:
     # previously-posted bot comment.
     - name: Post or update comment
       if: steps.pr.outputs.number
-      uses: composer/api-surface-check/post-comment@${{ github.action_ref }}
+      uses: ./post-comment
       with:
         pr-number: ${{ steps.pr.outputs.number }}
         output-dir: ${{ inputs.output-dir }}
