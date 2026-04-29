@@ -29,6 +29,11 @@ A minimal job whose only purpose is to fire `workflow_run` so the main workflow 
 
 ```yaml
 name: 'API Surface Check'
+
+# Minimal pull_request workflow whose only job is to fire workflow_run for the
+# api-surface-comment workflow (which has pull-requests:write even on fork PRs
+# and runs the actual analysis from trusted action code).
+
 on:
   pull_request:
     paths-ignore:
@@ -122,28 +127,6 @@ jobs:
 | `comment-marker`     | `<!-- api-surface-bot -->` | HTML marker used to identify previous bot comments.                                    |
 
 The PR number and base ref are resolved automatically from the `workflow_run` event payload — you don't pass them.
-
-## Sub-actions
-
-The main action is a thin orchestrator. The work it can do — analysis and comment posting — is also exposed as standalone sub-actions for advanced setups (custom workflows, smoke testing, or scenarios that don't fit the two-workflow `pull_request`/`workflow_run` pattern).
-
-### `composer/api-surface-check/analyze`
-
-Runs the full analysis: setup PHP, install action deps, optionally install project deps, snapshot HEAD and BASE, diff, and write `comment-body.txt`. Assumes the consumer has already checked out a git tree with HEAD and `base-ref` reachable.
-
-Inputs are the same as the main action's analysis-related inputs (`paths`, `source-roots`, `working-directory`, `install-dependencies`, etc.) plus a required `base-ref`. Outputs `has-changes` (`true`/`false`) and `output-dir`.
-
-### `composer/api-surface-check/post-comment`
-
-Posts, updates, or deletes a PR comment based on the `comment-body.txt` produced by `analyze`. Run it unconditionally once the PR is resolved — when given an empty/missing body it deletes any previously-posted bot comment, which fixes stale comments after a PR is updated to revert API additions.
-
-| Input            | Default                    | Description                                                                                                |
-| ---------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `pr-number`      | _required_                 | PR number to post / update / delete the comment on.                                                        |
-| `output-dir`     | `api-surface-result`       | Directory containing `comment-body.txt`. An empty/missing body deletes any existing marked comment.        |
-| `comment-marker` | `<!-- api-surface-bot -->` | HTML marker that identifies previous bot comments.                                                         |
-
-Requires `GH_TOKEN` env (passed in by the consumer) with `pull-requests: write`.
 
 ## Resolving vendor parents
 
