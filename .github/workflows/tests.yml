@@ -97,8 +97,8 @@ jobs:
           git add -A
           git commit -q -m head
 
-      - name: "Run action against scenario"
-        uses: ./
+      - name: "Run analyze sub-action against scenario"
+        uses: ./analyze
         with:
           base-ref: HEAD~1
           working-directory: scenario

@@ -25,40 +25,33 @@ The action is split across two workflows so that fork PRs can be analyzed safely
 
 ### Trigger workflow (`pull_request`)
 
+A minimal job whose only purpose is to fire `workflow_run` so the main workflow can pick up the job.
+
 ```yaml
 name: 'API Surface Check'
 on:
   pull_request:
+    paths-ignore:
+      - 'doc/**'   # optional: skip doc-only PRs entirely
+      - 'tests/**'
 
-permissions:
-  contents: read
+permissions: {}
 
-# Cancel an in-progress preflight when a new push lands on the same PR.
+# Cancel an in-progress trigger run when a new push lands on the same PR.
 concurrency:
   group: api-surface-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  signal:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: composer/api-surface-check/preflight@main
-        with:
-          base-ref: origin/${{ github.event.pull_request.base.ref }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: api-surface-preflight
-          path: api-surface-preflight/
-          retention-days: 1
+      - run: 'true'
 ```
 
 ### Comment workflow (`workflow_run`, has write permissions)
+
+The main action handles the entire flow — downloading the preflight verdict, resolving the PR, checking out the PR head, running the analysis, and posting / updating / deleting the comment. The job body is one `uses:` line.
 
 ```yaml
 name: 'API Surface Comment'
@@ -71,91 +64,42 @@ permissions:
   contents: read
   pull-requests: write
 
-# Cancel an in-progress comment run when a re-run / repeat workflow_run fires
-# for the same head SHA.
+# Cancel an in-progress comment run when a force-push or workflow_run re-run
+# fires for the same PR. head_sha alone wouldn't catch force-pushes (each push
+# has a different SHA); the (head repo + head branch) pair survives that and
+# disambiguates forks using identical branch names.
 concurrency:
-  group: api-surface-comment-${{ github.event.workflow_run.head_sha }}
+  group: api-surface-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   comment:
-    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: composer/api-surface-check@main
         with:
-          name: api-surface-preflight
-          path: api-surface-preflight/
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-
-      - id: preflight
-        run: |
-          if [[ "$(cat api-surface-preflight/preflight.txt 2>/dev/null)" == "true" ]]; then
-              echo "should-run=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Resolve the PR unconditionally so we can clean up a stale comment
-      # even when preflight says no API-relevant changes (e.g. a PR was
-      # updated to revert previously-reported additions).
-      - id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          response=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/pulls")
-          number=$(echo "$response" | jq -r '.[0].number // empty')
-          base_ref=$(echo "$response" | jq -r '.[0].base.ref // empty')
-          [[ -n "$number" && -n "$base_ref" ]] || exit 0
-          echo "number=$number" >> "$GITHUB_OUTPUT"
-          echo "base-ref=$base_ref" >> "$GITHUB_OUTPUT"
-
-      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
-        uses: actions/checkout@v6
-        with:
-          ref: refs/pull/${{ steps.pr.outputs.number }}/head
-          fetch-depth: 0
-          persist-credentials: false
-
-      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
-        run: git fetch --no-tags origin "${{ steps.pr.outputs.base-ref }}:refs/remotes/origin/${{ steps.pr.outputs.base-ref }}"
-
-      - if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
-        uses: composer/api-surface-check@main
-        with:
-          base-ref: origin/${{ steps.pr.outputs.base-ref }}
-          # INPUTS / CONFIG GOES HERE
           # install-dependencies: true
           # paths: src/**/*.php
           # source-roots: src
           # include-internal: false
           # show-removed: true
           # show-modified: true
-
-      # Always run post-comment when we have a PR. With analysis skipped,
-      # comment-body.txt is missing/empty and post-comment deletes any
-      # previously-posted bot comment.
-      - if: steps.pr.outputs.number
-        uses: composer/api-surface-check/post-comment@main
-        with:
-          pr-number: ${{ steps.pr.outputs.number }}
-        env:
-          GH_TOKEN: ${{ github.token }}
 ```
 
 ### Why two workflows
 
-`pull_request` events from forks don't get write permission on the base repo's `GITHUB_TOKEN`, so the comment can't be posted from there. `workflow_run` runs in the base-repo context with elevated permissions but is fired by the (untrusted) `pull_request` workflow's completion. We treat anything from the PR as data, never as code or as identifiers — the action's source is checked out from the default branch (`./.trusted`), the PR head is checked out only as input to static reflection (better-reflection never executes it), and the PR number is resolved through `gh api .../commits/<head_sha>/pulls` rather than read from the PR-side artifact.
+`pull_request` events from forks don't get write permission on the base repo's `GITHUB_TOKEN`, so the comment can't be posted from there. `workflow_run` runs in the base-repo context with elevated permissions but is fired by the (untrusted) `pull_request` workflow's completion. We treat anything from the PR as data, never as code or as identifiers — the action is loaded by GitHub from a known repo+ref (not from PR code), the PR head is checked out only as input to static reflection (better-reflection never executes it), and the PR number is resolved via the GitHub API from `workflow_run.head_repository.owner.login` and `workflow_run.head_branch` rather than read from the PR-side artifact.
 
 ## Inputs
 
 ### Paths
 
-| Input                        | Default        | Description                                                                                                                                                    |
-| ---------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `paths`                      | `src/**/*.php` | Pathspec patterns to analyze, whitespace or newline separated.                                                                                                 |
-| `source-roots`               | `src`          | Directories used to resolve parent classes/interfaces.                                                                                                         |
-| `working-directory`          | `.`            | Directory the analysis runs from (must be a git repo). Useful for monorepos.                                                                                   |
-| `composer-working-directory` | (empty)        | Directory containing the analyzed project's `composer.json`. Empty means: same as `working-directory`. Only consulted when `install-dependencies` is `true`.   |
+| Input                        | Default        | Description                                                                                                                                                  |
+| ---------------------------- | -------------- |--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `paths`                      | `src/**/*.php` | Pathspec patterns to analyze, whitespace or newline separated.                                                                                               |
+| `source-roots`               | `src`          | Directories used to resolve parent classes/interfaces.                                                                                                       |
+| `working-directory`          | `.`            | Directory the analysis runs from (must be a git repo). Useful for monorepos.                                                                                 |
+| `composer-working-directory` | (empty)        | Directory containing the analyzed project's `composer.json`. Empty means: same as `working-directory`. Only consulted when `install-dependencies` is `true`. |
 
 ### Reporting
 
@@ -171,36 +115,27 @@ jobs:
 
 ### Internal
 
-| Input            | Default                    | Description                                                  |
-| ---------------- | -------------------------- | ------------------------------------------------------------ |
-| `base-ref`       | _required_                 | Git ref to compare HEAD against (e.g. `origin/main`).        |
-| `output-dir`     | `api-surface-result`       | Directory the artifact is written to.                       |
-| `comment-marker` | `<!-- api-surface-bot -->` | HTML marker used to identify previous bot comments.         |
+| Input                | Default                    | Description                                                                            |
+| -------------------- | -------------------------- | -------------------------------------------------------------------------------------- |
+| `preflight-artifact` | `api-surface-preflight`    | Name of the artifact uploaded by the trigger workflow's preflight step.                |
+| `output-dir`         | `api-surface-result`       | Directory inside the comment workflow's runner where the analysis output is written.   |
+| `comment-marker`     | `<!-- api-surface-bot -->` | HTML marker used to identify previous bot comments.                                    |
 
-## Outputs
-
-| Output        | Description                                                       |
-| ------------- | ----------------------------------------------------------------- |
-| `has-changes` | `true`/`false` — whether any reportable changes were detected.    |
-| `output-dir`  | Path to the directory containing the artifact.                    |
+The PR number and base ref are resolved automatically from the `workflow_run` event payload — you don't pass them.
 
 ## Sub-actions
 
-Two helpers ship alongside the main action — both are tiny composite actions that wrap the bash scripts under `scripts/`. They keep the consumer workflows free of inline bash and let other projects pick up the same primitives.
+The main action is a thin orchestrator. The work it can do — analysis and comment posting — is also exposed as standalone sub-actions for advanced setups (custom workflows, smoke testing, or scenarios that don't fit the two-workflow `pull_request`/`workflow_run` pattern).
 
-### `composer/api-surface-check/preflight`
+### `composer/api-surface-check/analyze`
 
-Quickly scans the PR diff for tokens that could affect the API surface. Writes `true` or `false` to a verdict file. Use it in the trigger workflow to skip the artifact upload (and downstream comment work) when nothing relevant changed.
+Runs the full analysis: setup PHP, install action deps, optionally install project deps, snapshot HEAD and BASE, diff, and write `comment-body.txt`. Assumes the consumer has already checked out a git tree with HEAD and `base-ref` reachable.
 
-| Input         | Default                                  | Description                                                |
-| ------------- | ---------------------------------------- | ---------------------------------------------------------- |
-| `base-ref`    | _required_                               | Git ref to diff against.                                   |
-| `paths`       | `src/**/*.php`                           | Pathspec patterns to scan.                                 |
-| `output-file` | `api-surface-preflight/preflight.txt`    | Where to write the `true`/`false` verdict.                 |
+Inputs are the same as the main action's analysis-related inputs (`paths`, `source-roots`, `working-directory`, `install-dependencies`, etc.) plus a required `base-ref`. Outputs `has-changes` (`true`/`false`) and `output-dir`.
 
 ### `composer/api-surface-check/post-comment`
 
-Posts, updates, or deletes a PR comment based on the artifact produced by the main action. Use it in the comment workflow. Run it unconditionally once the PR is resolved — when given an empty/missing `comment-body.txt` it deletes any previously-posted bot comment, which fixes stale comments after a PR is updated to revert API additions.
+Posts, updates, or deletes a PR comment based on the `comment-body.txt` produced by `analyze`. Run it unconditionally once the PR is resolved — when given an empty/missing body it deletes any previously-posted bot comment, which fixes stale comments after a PR is updated to revert API additions.
 
 | Input            | Default                    | Description                                                                                                |
 | ---------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------- |

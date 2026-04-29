@@ -39,9 +39,17 @@ fi
 
 # Filter to actual added/removed code lines (exclude diff headers like +++ ---).
 # Then look for tokens that could change the public API surface.
+#
+# We use `grep` (not `grep -q`) and capture the output: with `set -o pipefail`,
+# the early-exit of `grep -q` causes upstream commands to receive SIGPIPE,
+# which inflates the pipeline's exit status to 141 — silently flipping a real
+# match into a "false" verdict. Capturing the matches and testing the result
+# avoids the early-exit entirely.
 api_pattern='\b(class|interface|trait|enum|function|const|extends|implements|public|protected|private|abstract|final|static|readonly)\b|\buse\s+\w|@(internal|private)\b'
 
-if echo "${diff_output}" | grep -E '^[+-][^+-]' | grep -qE "${api_pattern}"; then
+matches=$(echo "${diff_output}" | grep -E '^[+-][^+-]' | grep -E "${api_pattern}" || true)
+
+if [[ -n "${matches}" ]]; then
     echo "true" > "${OUTPUT_FILE}"
     echo "Detected potential API-surface change; full analysis required."
 else

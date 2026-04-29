@@ -1,0 +1,126 @@
+name: 'API Surface Check — Analyze'
+description: 'Run the API-surface analysis against an already-checked-out git tree. Used internally by the main action; can also be called directly for advanced setups that don''t go through workflow_run.'
+author: 'Composer'
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  base-ref:
+    description: 'Git ref to compare HEAD against (e.g. origin/main).'
+    required: true
+  paths:
+    description: 'Pathspec patterns of files to analyze (whitespace or newline separated).'
+    required: false
+    default: 'src/**/*.php'
+  source-roots:
+    description: 'Directories used to resolve parent classes/interfaces, comma or whitespace separated.'
+    required: false
+    default: 'src'
+  output-dir:
+    description: 'Directory to write outputs to (relative to the consuming workflow''s working dir).'
+    required: false
+    default: 'api-surface-result'
+  include-internal:
+    description: 'Include symbols marked with @internal or @private.'
+    required: false
+    default: 'false'
+  types:
+    description: 'Comma-separated list of symbol kinds to report (class,interface,trait,enum,method,property,constant).'
+    required: false
+    default: 'class,interface,trait,enum,method,property,constant'
+  visibility:
+    description: 'Comma-separated visibilities to report (public,protected,private).'
+    required: false
+    default: 'public,protected'
+  show-removed:
+    description: 'Include removed symbols in the report.'
+    required: false
+    default: 'true'
+  show-modified:
+    description: 'Include symbols whose signature changed.'
+    required: false
+    default: 'true'
+  comment-marker:
+    description: 'HTML comment marker used to identify previous bot comments.'
+    required: false
+    default: '<!-- api-surface-bot -->'
+  heading:
+    description: 'Markdown heading for the comment body.'
+    required: false
+    default: '## API Surface Changes'
+  working-directory:
+    description: 'Directory the analysis runs from (must be a git repo with the analyzed files). Defaults to the workflow''s working directory.'
+    required: false
+    default: '.'
+  install-dependencies:
+    description: 'Run composer install in the analyzed project so vendor classes are resolvable when walking parent hierarchies. Composer is invoked with --no-scripts and --no-plugins so PR-controlled code never executes.'
+    required: false
+    default: 'false'
+  composer-working-directory:
+    description: 'Directory containing the analyzed project''s composer.json. Empty (default) means use the value of working-directory.'
+    required: false
+    default: ''
+
+outputs:
+  has-changes:
+    description: 'Whether any reportable API surface changes were detected.'
+    value: ${{ steps.detect.outputs.has-changes }}
+  output-dir:
+    description: 'Directory containing comment-body.txt and the head/base snapshot JSON files.'
+    value: ${{ steps.detect.outputs.output-dir }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup PHP
+      uses: shivammathur/setup-php@accd6127cb78bee3e8082180cb391013d204ef9f # 2.37.0
+      with:
+        coverage: 'none'
+        php-version: 8.5
+        tools: composer:v2
+
+    - name: Install action dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: composer install --no-interaction --no-progress --classmap-authoritative
+
+    - name: Install project dependencies
+      id: project-deps
+      if: inputs.install-dependencies == 'true'
+      shell: bash
+      working-directory: ${{ inputs.composer-working-directory || inputs.working-directory }}
+      run: |
+        if [[ ! -f composer.json ]]; then
+          echo "::warning::install-dependencies=true but no composer.json at $(pwd); proceeding without vendor resolution."
+          exit 0
+        fi
+        # Safety: --no-scripts blocks composer.json scripts; --no-plugins blocks
+        # installed composer-plugin code. Together they reduce composer install
+        # to "fetch tarballs and write autoload" — no PR-controlled code runs.
+        if ! composer install --no-scripts --no-plugins --no-dev --prefer-dist --no-interaction --no-progress --ignore-platform-reqs; then
+          echo "::warning::composer install failed; proceeding without vendor resolution."
+          exit 0
+        fi
+        if [[ -d vendor ]]; then
+          echo "vendor-path=$(cd vendor && pwd)" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run analysis
+      id: detect
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        PATHS_GLOB: ${{ inputs.paths }}
+        SOURCE_ROOTS: ${{ inputs.source-roots }}
+        VENDOR_PATH: ${{ steps.project-deps.outputs.vendor-path }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        INCLUDE_INTERNAL: ${{ inputs.include-internal }}
+        TYPES: ${{ inputs.types }}
+        VISIBILITY: ${{ inputs.visibility }}
+        SHOW_REMOVED: ${{ inputs.show-removed }}
+        SHOW_MODIFIED: ${{ inputs.show-modified }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+        HEADING: ${{ inputs.heading }}
+      run: bash ${{ github.action_path }}/../scripts/detect.sh
