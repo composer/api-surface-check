@@ -1,5 +1,5 @@
 name: 'API Surface Check for PHP'
-description: 'Comment on a pull request with the public API surface changes (added, removed, modified symbols) detected via static reflection.'
+description: 'Comment on a pull request with the public API surface changes (added, removed, modified symbols) detected.'
 author: 'Composer'
 branding:
   icon: 'eye'
