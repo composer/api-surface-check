@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     name: "PHPUnit (PHP ${{ matrix.php }})"
@@ -113,7 +117,8 @@ jobs:
           SOURCE_ROOTS: 'src'
           SHOW_MODIFIED: 'false'
           SHOW_REMOVED: 'true'
-        run: bash ${{ github.workspace }}/scripts/detect.sh
+          WORKSPACE: ${{ github.workspace }}
+        run: bash "${WORKSPACE}/scripts/detect.sh"
 
       - name: "Assert expected output"
         run: |
