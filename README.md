@@ -49,6 +49,7 @@ concurrency:
 
 jobs:
   signal:
+    name: 'Trigger check'
     runs-on: ubuntu-latest
     steps:
       - run: 'true'
