@@ -65,10 +65,6 @@ on:
     workflows: ['API Surface Check']
     types: [completed]
 
-permissions:
-  contents: read
-  pull-requests: write
-
 # Cancel an in-progress comment run when a force-push or workflow_run re-run
 # fires for the same PR. head_sha alone wouldn't catch force-pushes (each push
 # has a different SHA); the (head repo + head branch) pair survives that and
@@ -79,7 +75,13 @@ concurrency:
 
 jobs:
   check-api-surface:
+    name: API surface comment
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
     steps:
       - uses: composer/api-surface-check@main
         with:
