@@ -80,10 +80,10 @@ jobs:
 
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: write # required to create the comment on the pull request
 
     steps:
-      - uses: composer/api-surface-check@main
+      - uses: composer/api-surface-check@main # TODO pin the version here ideally
         with:
           # install-dependencies: false
           # paths: src/**/*.php
