@@ -93,12 +93,27 @@ runs:
         fetch-depth: 1
         persist-credentials: false
 
-    - name: Fetch base ref
+    - name: Fetch merge base
+      id: base
       if: steps.pr.outputs.number
       shell: bash
       env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
         BASE_REF: ${{ steps.pr.outputs.base-ref }}
-      run: git fetch --no-tags --depth=1 origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+      run: |
+        # Resolve the merge base server-side: shallow fetches mean the local
+        # repo can't compute it, and diffing against the BASE_REF tip produces
+        # garbage when the PR is rebased onto an older commit (everything main
+        # has gained since the rebase point shows up as "removed in PR").
+        head_sha=$(git rev-parse HEAD)
+        merge_base=$(gh api "repos/${REPO}/compare/${BASE_REF}...${head_sha}" --jq '.merge_base_commit.sha')
+        if [[ -z "${merge_base}" || "${merge_base}" == "null" ]]; then
+            echo "::error::Could not determine merge base for ${BASE_REF}...${head_sha}"
+            exit 1
+        fi
+        git fetch --no-tags --depth=1 origin "${merge_base}"
+        echo "merge-base=${merge_base}" >> "$GITHUB_OUTPUT"
 
     - name: Preflight scan
       id: preflight
@@ -106,7 +121,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        BASE_REF: origin/${{ steps.pr.outputs.base-ref }}
+        BASE_REF: ${{ steps.base.outputs.merge-base }}
         PATHS_GLOB: ${{ inputs.paths }}
         OUTPUT_FILE: api-surface-preflight.txt
         ACTION_PATH: ${{ github.action_path }}
@@ -155,7 +170,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        BASE_REF: origin/${{ steps.pr.outputs.base-ref }}
+        BASE_REF: ${{ steps.base.outputs.merge-base }}
         PATHS_GLOB: ${{ inputs.paths }}
         SOURCE_ROOTS: ${{ inputs.source-roots }}
         COMPOSER_PROJECT_PATH: ${{ steps.project-deps.outputs.project-path }}
