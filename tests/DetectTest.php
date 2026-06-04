@@ -282,4 +282,39 @@ final class DetectTest extends TestCase
         $this->assertStringContainsString('L\\TopLevel::a', $body);
         $this->assertStringContainsString('L\\Sub\\Nested::b', $body);
     }
+
+    public function testRenamedClassIsReportedAsRemovedAndAdded(): void
+    {
+        // Mirrors composer/composer PR #12919: a file and its class are renamed
+        // (Version.php/class Version -> VersionRenamed.php/class VersionRenamed).
+        // The bodies are identical, so git classifies this as a single rename (R)
+        // entry. detect.sh must decompose it (via --no-renames) into a delete +
+        // add; otherwise --diff-filter=AMD drops the R entry and neither the old
+        // nor the new class reaches the snapshotter.
+        $classBody = "{\n    public function major(): int { return 1; }\n    public function minor(): int { return 2; }\n    public function patch(): int { return 3; }\n}\n";
+        $this->commit([
+            'src/Platform/Version.php' => "<?php\nnamespace L\\Platform;\nclass Version " . $classBody,
+        ], 'base');
+
+        // The commit() helper only writes files; remove the old one ourselves so
+        // `git add -A` stages the deletion alongside the new file.
+        unlink($this->repoDir . '/src/Platform/Version.php');
+        $this->commit([
+            'src/Platform/VersionRenamed.php' => "<?php\nnamespace L\\Platform;\nclass VersionRenamed " . $classBody,
+        ], 'rename Version to VersionRenamed');
+
+        $rendered = $this->runDetect();
+
+        $this->assertStringContainsString('### New API Surface', $rendered);
+        $this->assertStringContainsString('### Removed API Surface', $rendered);
+
+        // New is rendered before Removed; split so we can assert membership.
+        $removedAt = strpos($rendered, '### Removed API Surface');
+        $newSection = substr($rendered, 0, $removedAt);
+        $removedSection = substr($rendered, $removedAt);
+
+        $this->assertStringContainsString('L\\Platform\\VersionRenamed', $newSection, 'The renamed-to class should be reported as new API surface.');
+        // Backtick-bounded so it does not also match `L\Platform\VersionRenamed`.
+        $this->assertStringContainsString('`L\\Platform\\Version`', $removedSection, 'The renamed-from class should be reported as removed API surface.');
+    }
 }

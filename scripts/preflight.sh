@@ -29,7 +29,12 @@ done
 
 mkdir -p "$(dirname "${OUTPUT_FILE}")"
 
-diff_output=$(git diff "${BASE_REF}..HEAD" --unified=0 -- "${paths_array[@]}" 2>/dev/null || true)
+# --no-renames decomposes a renamed file into a full delete + full add, so the
+# token scan below sees the old and new content as -/+ lines. Without it, a
+# rename that only changes a class's namespace (class name unchanged) shows no
+# matching tokens and could wrongly gate the analysis off. Bias stays toward
+# "true", consistent with detect.sh.
+diff_output=$(git diff "${BASE_REF}..HEAD" --no-renames --unified=0 -- "${paths_array[@]}" 2>/dev/null || true)
 
 if [[ -z "${diff_output}" ]]; then
     echo "false" > "${OUTPUT_FILE}"

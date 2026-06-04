@@ -40,7 +40,14 @@ mkdir -p "${OUTPUT_DIR}"
 
 # All files in scope (added, modified, or deleted) — snapshot.php will silently
 # ignore missing files, so we can pass the same list for both refs.
-mapfile -t changed_files < <(git diff "${BASE_REF}..HEAD" --diff-filter=AMD --name-only -- "${paths_array[@]}" || true)
+#
+# --no-renames is essential: with git's default rename detection a renamed file
+# (e.g. Version.php -> VersionRenamed.php) is reported as a single R entry, which
+# --diff-filter=AMD drops entirely, so neither path would reach the snapshotter.
+# Disabling rename detection decomposes a rename into a delete (old path) + add
+# (new path) — both pass the AMD filter, so the old FQCN is reported as removed
+# and the new FQCN as added (there is no rename-pairing).
+mapfile -t changed_files < <(git diff "${BASE_REF}..HEAD" --no-renames --diff-filter=AMD --name-only -- "${paths_array[@]}" || true)
 
 # Filter out empty entries
 changed_files=("${changed_files[@]/#/}")
