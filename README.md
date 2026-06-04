@@ -145,4 +145,5 @@ If `composer install` fails (network hiccup, auth issue, missing `composer.json`
 
 - Trait usage is not factored into the introduction-point check. A class that newly applies a trait will see the trait's methods reported as new on the class.
 - Anonymous classes are skipped.
+- Renaming a class (or moving it to another namespace) is reported as a removal of the old fully-qualified name plus an addition of the new one — there is no rename-pairing heuristic.
 - When a parent class or implemented interface can't be resolved (no `install-dependencies`, or a private repository, or a transient install failure), the introduction-point check defaults to "introduced here" — i.e. methods will be reported even if they actually came from an unresolved parent. This is the conservative direction: rather over-report than miss real API additions.
