@@ -49,7 +49,7 @@ jobs:
     name: 'Analyze API surface'
     runs-on: ubuntu-latest
     steps:
-      - uses: composer/api-surface-check@v2 # TODO pin the version here ideally
+      - uses: composer/api-surface-check@2.0.0 # ideally pin the commit SHA instead
         with:
           # install-dependencies: false
           # paths: src/**/*.php
@@ -85,7 +85,7 @@ jobs:
       pull-requests: write # create the comment on the pull request
 
     steps:
-      - uses: composer/api-surface-check/post-comment@v2 # TODO pin the version here ideally
+      - uses: composer/api-surface-check/post-comment@2.0.0 # ideally pin the commit SHA instead
 ```
 
 `post-comment` only acts when the triggering run was a `pull_request` run that succeeded. A failed or cancelled analysis leaves any existing comment as is. Keep the analysis in its own workflow as shown above: if it shares a workflow with other jobs, any of them failing also blocks the comment update.
@@ -151,13 +151,13 @@ If `composer install` fails (network hiccup, auth issue, missing `composer.json`
 
 In 1.x a single action ran everything from the `workflow_run` workflow. In 2.x:
 
-1. In the `pull_request` workflow, replace the no-op job with `composer/api-surface-check@v2`, and set `permissions: contents: read`. Move your analysis inputs (`paths`, `install-dependencies`, …) there.
-2. In the `workflow_run` workflow, use `composer/api-surface-check/post-comment@v2` instead, and change its permissions to `actions: read` + `pull-requests: write` (`contents: read` is no longer needed).
+1. In the `pull_request` workflow, replace the no-op job with `composer/api-surface-check@2.0.0`, and set `permissions: contents: read`. Move your analysis inputs (`paths`, `install-dependencies`, …) there.
+2. In the `workflow_run` workflow, use `composer/api-surface-check/post-comment@2.0.0` instead, and change its permissions to `actions: read` + `pull-requests: write` (`contents: read` is no longer needed).
 3. If you customized `comment-marker`, set it in both.
 4. `output-dir` was removed. The analysis output now lives in the runner's temp directory and is attached as the `artifact-name` artifact.
 5. `install-dependencies` now installs in place with `install-flags`, rather than in an isolated copy, so relative `path` repositories work again.
 
-Running `composer/api-surface-check@v2` from anything but a `pull_request` workflow fails with an error pointing here.
+Running 2.x of `composer/api-surface-check` from anything but a `pull_request` workflow fails with an error pointing here.
 
 ## Limitations
 
