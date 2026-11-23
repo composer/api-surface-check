@@ -1,5 +1,5 @@
 name: 'API Surface Check for PHP'
-description: 'Detect public API surface changes (added, removed, modified symbols) in a PHP pull request. Pair with the post-comment action to comment on the PR.'
+description: 'Detect public API surface changes (added, removed, modified symbols) in PHP pull requests and comment them on the PR.'
 author: 'Composer'
 branding:
   icon: 'eye'
