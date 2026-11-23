@@ -17,7 +17,7 @@ The result is written to a directory containing `comment-body.txt` (a markdown b
 The action parses your code via `roave/better-reflection`'s AST-based reflection rather than `require`-ing it and using PHP's runtime reflection. Two consequences:
 
 - **No code execution.** PR-controlled PHP is never loaded by the action — it's parsed as data. This is what makes the analysis safe to run against fork PRs.
-- **Optional, sandboxed dependency install.** Resolving parents that live in Composer dependencies is opt-in (`install-dependencies: true`). When enabled, `composer install` runs with `--no-scripts --no-plugins` — composer fetches archives and writes autoload files, but never executes anything from a tarball or a configured plugin.
+- **Optional, sandboxed dependency install.** Resolving parents that live in Composer dependencies is opt-in (`install-dependencies: true`). When enabled, `composer install` runs with `--no-scripts --no-plugins` — composer fetches archives and writes autoload files, but never executes anything from a tarball or a configured plugin. It runs on a copy of `composer.json`/`composer.lock` in a temporary directory with the `config`, `autoload` and `scripts` sections stripped (except `config.platform` and `config.policy`), so PR-controlled settings like `vendor-dir` or committed symlinks cannot redirect writes outside of it. As a consequence, `path` repositories using relative paths are not supported.
 
 ## Usage
 
