@@ -1,5 +1,5 @@
 name: 'API Surface Check for PHP'
-description: 'Comment on a pull request with the public API surface changes (added, removed, modified symbols) detected.'
+description: 'Detect public API surface changes (added, removed, modified symbols) in a PHP pull request. Pair with the post-comment action to comment on the PR.'
 author: 'Composer'
 branding:
   icon: 'eye'
@@ -14,10 +14,6 @@ inputs:
     description: 'Directories used to resolve parent classes/interfaces, comma or whitespace separated.'
     required: false
     default: 'src'
-  output-dir:
-    description: 'Directory inside the runner where the analysis output is written.'
-    required: false
-    default: 'api-surface-result'
   include-internal:
     description: 'Include symbols marked with @internal or @private.'
     required: false
@@ -39,7 +35,7 @@ inputs:
     required: false
     default: 'true'
   comment-marker:
-    description: 'HTML comment marker used to identify previous bot comments.'
+    description: 'HTML comment marker used to identify previous bot comments. Must match the post-comment action''s comment-marker.'
     required: false
     default: '<!-- api-surface-bot -->'
   heading:
@@ -51,86 +47,90 @@ inputs:
     required: false
     default: '.'
   install-dependencies:
-    description: 'Run composer install in the analyzed project so vendor classes are resolvable when walking parent hierarchies. Composer is invoked with --no-scripts and --no-plugins so PR-controlled code never executes.'
+    description: 'Run composer install in the analyzed project so vendor classes are resolvable when walking parent hierarchies.'
     required: false
     default: 'false'
+  install-flags:
+    description: 'Extra flags passed to composer install when install-dependencies is enabled.'
+    required: false
+    default: '--no-dev --no-scripts --no-plugins --ignore-platform-reqs'
   composer-working-directory:
     description: 'Directory containing the analyzed project''s composer.json. Empty (default) means use the value of working-directory.'
     required: false
     default: ''
+  checkout:
+    description: 'Check out the PR head before analyzing. Set to false if you check out (and optionally install dependencies) yourself before this action.'
+    required: false
+    default: 'true'
+  artifact-name:
+    description: 'Name of the artifact holding the result. Must match the post-comment action''s artifact-name.'
+    required: false
+    default: 'api-surface-result'
 
 runs:
   using: 'composite'
   steps:
-    - name: Resolve PR via API
-      id: pr
+    - name: Check event
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
-        REPO: ${{ github.repository }}
-        HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
-        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        EVENT_NAME: ${{ github.event_name }}
       run: |
-        # Resolve by head ref rather than commit SHA: the commits/{sha}/pulls
-        # endpoint returns empty for fork PRs even when the SHA is the live
-        # head of an open PR. The head-ref query handles same-repo and fork
-        # PRs uniformly.
-        response=$(gh api "repos/${REPO}/pulls?state=all&head=${HEAD_OWNER}:${HEAD_BRANCH}&per_page=1")
-        number=$(echo "$response" | jq -r '.[0].number // empty')
-        base_ref=$(echo "$response" | jq -r '.[0].base.ref // empty')
-        if [[ -z "$number" || -z "$base_ref" ]]; then
-            echo "Could not resolve PR for ${HEAD_OWNER}:${HEAD_BRANCH}; nothing to do."
-            exit 0
+        # pull_request only: workflow_run/pull_request_target hold a write token,
+        # which must never share a job with PR checkout and analysis.
+        if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "::error::composer/api-surface-check must run on pull_request (got ${EVENT_NAME}). Since 2.0, post the comment from your workflow_run workflow with composer/api-surface-check/post-comment, see the README."
+            exit 1
         fi
-        echo "number=${number}" >> "$GITHUB_OUTPUT"
-        echo "base-ref=${base_ref}" >> "$GITHUB_OUTPUT"
 
-    - name: Checkout PR head (data only)
-      if: steps.pr.outputs.number
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Checkout PR head
+      if: inputs.checkout == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        ref: refs/pull/${{ steps.pr.outputs.number }}/head
+        ref: ${{ github.event.pull_request.head.sha }}
         fetch-depth: 1
         persist-credentials: false
 
     - name: Fetch merge base
       id: base
-      if: steps.pr.outputs.number
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
-        BASE_REF: ${{ steps.pr.outputs.base-ref }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        SERVER_URL: ${{ github.server_url }}
       run: |
-        # Resolve the merge base server-side: shallow fetches mean the local
-        # repo can't compute it, and diffing against the BASE_REF tip produces
-        # garbage when the PR is rebased onto an older commit (everything main
-        # has gained since the rebase point shows up as "removed in PR").
+        # Resolved server-side so shallow checkouts work. Diffing against the
+        # BASE_REF tip instead would report everything main gained since the
+        # PR's fork point as "removed".
         head_sha=$(git rev-parse HEAD)
         merge_base=$(gh api "repos/${REPO}/compare/${BASE_REF}...${head_sha}" --jq '.merge_base_commit.sha')
         if [[ -z "${merge_base}" || "${merge_base}" == "null" ]]; then
             echo "::error::Could not determine merge base for ${BASE_REF}...${head_sha}"
             exit 1
         fi
-        git fetch --no-tags --depth=1 origin "${merge_base}"
+        # Pass the token explicitly: checkouts use persist-credentials: false,
+        # which breaks this fetch on private repositories otherwise.
+        auth=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+        echo "::add-mask::${auth}"
+        git -c "http.${SERVER_URL}/.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags --depth=1 origin "${merge_base}"
         echo "merge-base=${merge_base}" >> "$GITHUB_OUTPUT"
 
     - name: Preflight scan
       id: preflight
-      if: steps.pr.outputs.number
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         BASE_REF: ${{ steps.base.outputs.merge-base }}
         PATHS_GLOB: ${{ inputs.paths }}
-        OUTPUT_FILE: api-surface-preflight.txt
+        OUTPUT_FILE: ${{ runner.temp }}/api-surface-preflight.txt
         ACTION_PATH: ${{ github.action_path }}
       run: |
         bash "${ACTION_PATH}/scripts/preflight.sh"
-        echo "should-run=$(cat api-surface-preflight.txt)" >> "$GITHUB_OUTPUT"
+        echo "should-run=$(cat "${OUTPUT_FILE}")" >> "$GITHUB_OUTPUT"
 
     - name: Setup PHP
-      if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
+      if: steps.preflight.outputs.should-run == 'true'
       uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
       with:
         coverage: 'none'
@@ -138,25 +138,38 @@ runs:
         tools: composer:v2
 
     - name: Install action dependencies
-      if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
+      if: steps.preflight.outputs.should-run == 'true'
       shell: bash
       working-directory: ${{ github.action_path }}
       run: composer install --no-dev --no-interaction --no-progress
 
     - name: Install project dependencies
       id: project-deps
-      if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true' && inputs.install-dependencies == 'true'
+      if: steps.preflight.outputs.should-run == 'true'
       shell: bash
       working-directory: ${{ inputs.composer-working-directory || inputs.working-directory }}
       env:
-        ACTION_PATH: ${{ github.action_path }}
+        INSTALL_DEPENDENCIES: ${{ inputs.install-dependencies }}
+        INSTALL_FLAGS: ${{ inputs.install-flags }}
       run: |
-        INSTALL_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/api-surface-deps.XXXXXX")/project" \
-          bash "${ACTION_PATH}/scripts/install-project-deps.sh"
+        if [[ "${INSTALL_DEPENDENCIES}" == "true" ]]; then
+            if [[ ! -f composer.json ]]; then
+                echo "::warning::install-dependencies=true but no composer.json at $(pwd); proceeding without vendor resolution."
+                exit 0
+            fi
+            read -r -a flags <<< "${INSTALL_FLAGS}"
+            if ! composer install --no-interaction --no-progress --prefer-dist "${flags[@]}"; then
+                echo "::warning::composer install failed; proceeding without vendor resolution."
+                exit 0
+            fi
+        fi
+        # Also picks up dependencies installed by the workflow before this action.
+        if [[ -f composer.json ]] && vendor_dir=$(composer config --no-plugins vendor-dir --absolute 2>/dev/null) && [[ -f "${vendor_dir}/composer/installed.json" ]]; then
+            echo "project-path=$(pwd)" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Run analysis
-      id: detect
-      if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true'
+      if: steps.preflight.outputs.should-run == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -164,7 +177,7 @@ runs:
         PATHS_GLOB: ${{ inputs.paths }}
         SOURCE_ROOTS: ${{ inputs.source-roots }}
         COMPOSER_PROJECT_PATH: ${{ steps.project-deps.outputs.project-path }}
-        OUTPUT_DIR: ${{ inputs.output-dir }}
+        OUTPUT_DIR: ${{ runner.temp }}/api-surface-result
         INCLUDE_INTERNAL: ${{ inputs.include-internal }}
         TYPES: ${{ inputs.types }}
         VISIBILITY: ${{ inputs.visibility }}
@@ -172,20 +185,33 @@ runs:
         SHOW_MODIFIED: ${{ inputs.show-modified }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         HEADING: ${{ inputs.heading }}
-        PR_NUMBER: ${{ steps.pr.outputs.number }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/scripts/detect.sh"
 
-    # Always run post-comment when we have a PR. With analysis skipped,
-    # comment-body.txt is missing/empty and post-comment deletes any
-    # previously-posted bot comment.
-    - name: Post or update comment
-      if: steps.pr.outputs.number
+    # Runs even when the analysis was skipped: an empty body tells post-comment
+    # to delete a stale comment.
+    - name: Prepare artifact
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
-        OUTPUT_DIR: ${{ inputs.output-dir }}
-        COMMENT_MARKER: ${{ inputs.comment-marker }}
-        PR_NUMBER: ${{ steps.pr.outputs.number }}
-        ACTION_PATH: ${{ github.action_path }}
-      run: bash "${ACTION_PATH}/scripts/post-comment.sh"
+        RESULT_DIR: ${{ runner.temp }}/api-surface-result
+        ARTIFACT_DIR: ${{ runner.temp }}/api-surface-artifact
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        mkdir -p "${ARTIFACT_DIR}"
+        if [[ -f "${RESULT_DIR}/comment-body.txt" ]]; then
+            cp "${RESULT_DIR}/comment-body.txt" "${ARTIFACT_DIR}/comment-body.txt"
+        else
+            : > "${ARTIFACT_DIR}/comment-body.txt"
+        fi
+        jq -n --argjson pr "${PR_NUMBER}" --arg sha "${HEAD_SHA}" '{version: 1, "pr-number": $pr, "head-sha": $sha}' > "${ARTIFACT_DIR}/metadata.json"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/api-surface-artifact
+        retention-days: 7
+        if-no-files-found: error
+        overwrite: true

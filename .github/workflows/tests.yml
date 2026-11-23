@@ -39,6 +39,27 @@ jobs:
       - name: "Run tests"
         run: vendor/bin/phpunit
 
+  action-self-test:
+    name: "Action self-test"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Runs the analyze half of the action from this branch against this PR.
+      # paths covers all PHP files so the full analysis runs on most PRs here.
+      - uses: ./
+        with:
+          paths: '**/*.php'
+          source-roots: 'src tests'
+          checkout: 'false'
+          install-dependencies: 'true'
+          artifact-name: api-surface-self-test
+
   action-smoke:
     name: "Action smoke test"
     runs-on: ubuntu-latest

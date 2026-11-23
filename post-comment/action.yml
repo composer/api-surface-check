@@ -1,0 +1,98 @@
+name: 'API Surface Check for PHP: post comment'
+description: 'Post the result of composer/api-surface-check as a pull request comment. Runs from a workflow_run workflow.'
+author: 'Composer'
+branding:
+  icon: 'message-square'
+  color: 'blue'
+
+inputs:
+  artifact-name:
+    description: 'Name of the artifact uploaded by the analysis. Must match the analyze action''s artifact-name.'
+    required: false
+    default: 'api-surface-result'
+  comment-marker:
+    description: 'HTML comment marker used to identify previous bot comments. Must match the analyze action''s comment-marker.'
+    required: false
+    default: '<!-- api-surface-bot -->'
+
+# Nothing from the PR is checked out or executed here: the artifact is only read
+# as data (metadata.json and the comment text).
+runs:
+  using: 'composite'
+  steps:
+    - name: Check event
+      id: event
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        RUN_EVENT: ${{ github.event.workflow_run.event }}
+        RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      run: |
+        if [[ "${EVENT_NAME}" != "workflow_run" ]]; then
+            echo "::error::composer/api-surface-check/post-comment must run on workflow_run (got ${EVENT_NAME}), see the README."
+            exit 1
+        fi
+        if [[ "${RUN_EVENT}" != "pull_request" ]]; then
+            echo "Triggering run was not a pull_request (${RUN_EVENT}); nothing to do."
+            exit 0
+        fi
+        # A failed or cancelled analysis leaves any existing comment alone.
+        if [[ "${RUN_CONCLUSION}" != "success" ]]; then
+            echo "Triggering run concluded with ${RUN_CONCLUSION}; nothing to do."
+            exit 0
+        fi
+        echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve PR via API
+      id: pr
+      if: steps.event.outputs.proceed == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      run: |
+        # Resolve by head ref rather than commit SHA: the commits/{sha}/pulls
+        # endpoint returns empty for fork PRs. Several open PRs can share a head
+        # branch; post-comment.sh picks the one the artifact is for.
+        if ! response=$(gh api "repos/${REPO}/pulls?state=open&head=${HEAD_OWNER}:${HEAD_BRANCH}&per_page=100"); then
+            echo "::error::Could not list PRs for ${HEAD_OWNER}:${HEAD_BRANCH}."
+            exit 1
+        fi
+        prs=$(echo "$response" | jq -c '[.[] | {number, "head-sha": .head.sha}]')
+        if [[ "$prs" == "[]" ]]; then
+            echo "No open PR for ${HEAD_OWNER}:${HEAD_BRANCH}; nothing to do."
+            exit 0
+        fi
+        echo "candidates=${prs}" >> "$GITHUB_OUTPUT"
+
+    - name: Download artifact
+      id: download
+      if: steps.pr.outputs.candidates
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      continue-on-error: true
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/api-surface-artifact
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
+
+    - name: Post or update comment
+      if: steps.pr.outputs.candidates && steps.download.outcome == 'success'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ARTIFACT_DIR: ${{ runner.temp }}/api-surface-artifact
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+        PR_CANDIDATES: ${{ steps.pr.outputs.candidates }}
+        RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: bash "${ACTION_PATH}/../scripts/post-comment.sh"
+
+    - name: Report missing artifact
+      if: steps.pr.outputs.candidates && steps.download.outcome != 'success'
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: echo "::warning::No '${ARTIFACT_NAME}' artifact found on the triggering run; is composer/api-surface-check running in it?"
