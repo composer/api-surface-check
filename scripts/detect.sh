@@ -36,6 +36,7 @@ done
 read -r -a roots_array <<< "$(echo "${SOURCE_ROOTS}" | tr '\n' ' ' | tr ',' ' ')"
 
 mkdir -p "${OUTPUT_DIR}"
+OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
 : > "${OUTPUT_DIR}/comment-body.txt"
 
 # All files in scope (added, modified, or deleted) — snapshot.php will silently
@@ -108,7 +109,7 @@ php "${SCRIPT_DIR}/snapshot.php" \
     php "${SCRIPT_DIR}/snapshot.php" \
         --files="${files_csv}" \
         --roots="${roots_csv}" \
-        --output="${OLDPWD}/${OUTPUT_DIR}/base-snapshot.json" \
+        --output="${OUTPUT_DIR}/base-snapshot.json" \
         "${composer_arg[@]}"
 )
 
