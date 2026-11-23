@@ -148,21 +148,11 @@ runs:
       if: steps.pr.outputs.number && steps.preflight.outputs.should-run == 'true' && inputs.install-dependencies == 'true'
       shell: bash
       working-directory: ${{ inputs.composer-working-directory || inputs.working-directory }}
+      env:
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        if [[ ! -f composer.json ]]; then
-          echo "::warning::install-dependencies=true but no composer.json at $(pwd); proceeding without vendor resolution."
-          exit 0
-        fi
-        # Safety: --no-scripts blocks composer.json scripts; --no-plugins blocks
-        # installed composer-plugin code. Together they reduce composer install
-        # to "fetch tarballs and write autoload" — no PR-controlled code runs.
-        if ! composer install --no-scripts --no-plugins --no-dev --prefer-dist --no-interaction --no-progress --ignore-platform-reqs; then
-          echo "::warning::composer install failed; proceeding without vendor resolution."
-          exit 0
-        fi
-        if [[ -d vendor ]]; then
-          echo "project-path=$(pwd)" >> "$GITHUB_OUTPUT"
-        fi
+        INSTALL_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/api-surface-deps.XXXXXX")/project" \
+          bash "${ACTION_PATH}/scripts/install-project-deps.sh"
 
     - name: Run analysis
       id: detect
