@@ -88,7 +88,7 @@ jobs:
       - uses: composer/api-surface-check/post-comment@v2 # TODO pin the version here ideally
 ```
 
-`post-comment` only acts when the triggering run was a `pull_request` run that succeeded. A failed or cancelled analysis leaves any existing comment as is.
+`post-comment` only acts when the triggering run was a `pull_request` run that succeeded. A failed or cancelled analysis leaves any existing comment as is. Keep the analysis in its own workflow as shown above: if it shares a workflow with other jobs, any of them failing also blocks the comment update.
 
 ## Inputs
 

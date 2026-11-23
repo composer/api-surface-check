@@ -6,8 +6,8 @@
 # Inputs (env):
 #   ARTIFACT_DIR    Directory holding comment-body.txt and metadata.json.
 #   COMMENT_MARKER  Marker that starts every bot comment.
-#   PR_NUMBER       PR number resolved via the API.
-#   PR_HEAD_SHA     Current head SHA of that PR, resolved via the API.
+#   PR_CANDIDATES   JSON list of {number, head-sha} of the open PRs for the
+#                   triggering run's head branch, resolved via the API.
 #   RUN_HEAD_SHA    Head SHA of the triggering workflow run.
 #   GH_TOKEN, GITHUB_REPOSITORY
 set -euo pipefail
@@ -15,8 +15,7 @@ set -euo pipefail
 ARTIFACT_DIR="${ARTIFACT_DIR:?ARTIFACT_DIR is required}"
 COMMENT_MARKER="${COMMENT_MARKER:-<!-- api-surface-bot -->}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"
-PR_HEAD_SHA="${PR_HEAD_SHA:?PR_HEAD_SHA is required}"
+PR_CANDIDATES="${PR_CANDIDATES:?PR_CANDIDATES is required}"
 RUN_HEAD_SHA="${RUN_HEAD_SHA:?RUN_HEAD_SHA is required}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
@@ -34,10 +33,12 @@ fi
 meta_pr=$(jq -r '."pr-number" // empty | tostring' "${meta_file}" 2>/dev/null || true)
 meta_sha=$(jq -r '."head-sha" // empty | strings' "${meta_file}" 2>/dev/null || true)
 
-if [[ "${meta_pr}" != "${PR_NUMBER}" ]]; then
-    echo "::warning::Artifact is for PR '${meta_pr}', expected ${PR_NUMBER}; nothing to do."
+PR_HEAD_SHA=$(jq -r --arg pr "${meta_pr}" '.[] | select((.number | tostring) == $pr) | ."head-sha"' <<< "${PR_CANDIDATES}")
+if [[ -z "${meta_pr}" || -z "${PR_HEAD_SHA}" ]]; then
+    echo "::warning::Artifact is for PR '${meta_pr}', which is not an open PR from this branch; nothing to do."
     exit 0
 fi
+PR_NUMBER="${meta_pr}"
 if [[ "${meta_sha}" != "${RUN_HEAD_SHA}" ]]; then
     echo "::warning::Artifact is for commit '${meta_sha}', expected ${RUN_HEAD_SHA}; nothing to do."
     exit 0
@@ -50,24 +51,29 @@ fi
 
 COMMENT_BODY=""
 if [[ -s "${body_file}" ]]; then
-    if [[ "$(head -c "${#COMMENT_MARKER}" "${body_file}")" != "${COMMENT_MARKER}" ]]; then
+    COMMENT_BODY=$(cat "${body_file}")
+    if [[ "${COMMENT_BODY}" != "${COMMENT_MARKER}"* ]]; then
         echo "::warning::Comment body does not start with the comment marker; nothing to do."
         exit 0
     fi
     if (( $(wc -c < "${body_file}") > MAX_BODY_BYTES )); then
-        # Cut on a line boundary so no multi-byte character is split.
-        COMMENT_BODY="$(head -c "${MAX_BODY_BYTES}" "${body_file}" | sed '$d')"$'\n\n_Output truncated, see the analysis job summary for the full list._'
-    else
-        COMMENT_BODY=$(cat "${body_file}")
+        # Truncate after the marker so the comment stays findable, cutting on a
+        # line boundary so no multi-byte character is split.
+        rest="${COMMENT_BODY:${#COMMENT_MARKER}}"
+        COMMENT_BODY="${COMMENT_MARKER}$(head -c $((MAX_BODY_BYTES - 1000)) <<< "${rest}" | sed '$d')"$'\n\n_Output truncated, see the analysis job summary for the full list._'
     fi
 fi
 
 # Only consider comments posted with github.token, so other users' comments
 # containing the marker are never edited or deleted.
 COMMENT_AUTHOR="${COMMENT_AUTHOR:-github-actions[bot]}"
-existing_comment_id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-    | jq -r --arg author "${COMMENT_AUTHOR}" --arg marker "${COMMENT_MARKER}" \
-        '.[] | select(.user.login == $author and (.body | startswith($marker))) | .id' | head -1) || true
+# A failed listing must not fall through to posting a duplicate.
+if ! comments=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate); then
+    echo "::error::Could not list comments on PR ${PR_NUMBER}."
+    exit 1
+fi
+existing_comment_id=$(jq -r --arg author "${COMMENT_AUTHOR}" --arg marker "${COMMENT_MARKER}" \
+    '.[] | select(.user.login == $author and (.body | startswith($marker))) | .id' <<< "${comments}" | head -1)
 
 if [[ -z "${COMMENT_BODY}" ]]; then
     if [[ -n "${existing_comment_id}" ]]; then

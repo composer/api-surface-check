@@ -54,21 +54,22 @@ runs:
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
       run: |
         # Resolve by head ref rather than commit SHA: the commits/{sha}/pulls
-        # endpoint returns empty for fork PRs. The PR number in the artifact is
-        # only cross-checked, never trusted on its own.
-        response=$(gh api "repos/${REPO}/pulls?state=open&head=${HEAD_OWNER}:${HEAD_BRANCH}&per_page=1")
-        number=$(echo "$response" | jq -r '.[0].number // empty')
-        head_sha=$(echo "$response" | jq -r '.[0].head.sha // empty')
-        if [[ -z "$number" || -z "$head_sha" ]]; then
-            echo "Could not resolve an open PR for ${HEAD_OWNER}:${HEAD_BRANCH}; nothing to do."
+        # endpoint returns empty for fork PRs. Several open PRs can share a head
+        # branch; post-comment.sh picks the one the artifact is for.
+        if ! response=$(gh api "repos/${REPO}/pulls?state=open&head=${HEAD_OWNER}:${HEAD_BRANCH}&per_page=100"); then
+            echo "::error::Could not list PRs for ${HEAD_OWNER}:${HEAD_BRANCH}."
+            exit 1
+        fi
+        prs=$(echo "$response" | jq -c '[.[] | {number, "head-sha": .head.sha}]')
+        if [[ "$prs" == "[]" ]]; then
+            echo "No open PR for ${HEAD_OWNER}:${HEAD_BRANCH}; nothing to do."
             exit 0
         fi
-        echo "number=${number}" >> "$GITHUB_OUTPUT"
-        echo "head-sha=${head_sha}" >> "$GITHUB_OUTPUT"
+        echo "candidates=${prs}" >> "$GITHUB_OUTPUT"
 
     - name: Download artifact
       id: download
-      if: steps.pr.outputs.number
+      if: steps.pr.outputs.candidates
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       continue-on-error: true
       with:
@@ -78,20 +79,19 @@ runs:
         github-token: ${{ github.token }}
 
     - name: Post or update comment
-      if: steps.pr.outputs.number && steps.download.outcome == 'success'
+      if: steps.pr.outputs.candidates && steps.download.outcome == 'success'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         ARTIFACT_DIR: ${{ runner.temp }}/api-surface-artifact
         COMMENT_MARKER: ${{ inputs.comment-marker }}
-        PR_NUMBER: ${{ steps.pr.outputs.number }}
-        PR_HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+        PR_CANDIDATES: ${{ steps.pr.outputs.candidates }}
         RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/../scripts/post-comment.sh"
 
     - name: Report missing artifact
-      if: steps.pr.outputs.number && steps.download.outcome != 'success'
+      if: steps.pr.outputs.candidates && steps.download.outcome != 'success'
       shell: bash
       env:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}

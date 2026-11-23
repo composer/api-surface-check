@@ -98,6 +98,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
+        SERVER_URL: ${{ github.server_url }}
       run: |
         # Resolved server-side so shallow checkouts work. Diffing against the
         # BASE_REF tip instead would report everything main gained since the
@@ -108,7 +109,11 @@ runs:
             echo "::error::Could not determine merge base for ${BASE_REF}...${head_sha}"
             exit 1
         fi
-        git fetch --no-tags --depth=1 origin "${merge_base}"
+        # Pass the token explicitly: checkouts use persist-credentials: false,
+        # which breaks this fetch on private repositories otherwise.
+        auth=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+        echo "::add-mask::${auth}"
+        git -c "http.${SERVER_URL}/.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags --depth=1 origin "${merge_base}"
         echo "merge-base=${merge_base}" >> "$GITHUB_OUTPUT"
 
     - name: Preflight scan

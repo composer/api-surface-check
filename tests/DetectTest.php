@@ -267,6 +267,50 @@ final class DetectTest extends TestCase
         $this->assertSame('', $bodyWith, 'With VENDOR_PATH set, overriding a vendor method should not appear as new API.');
     }
 
+    public function testVendorParentIsResolvedThroughComposerProjectPath(): void
+    {
+        // Mirrors install-dependencies: a real composer install (from a local
+        // path repository, so no network) then COMPOSER_PROJECT_PATH.
+        $this->commit([
+            'pkg/composer.json' => json_encode(['name' => 'acme/lib', 'version' => '1.0.0', 'autoload' => ['psr-4' => ['Acme\\Lib\\' => 'src/']]]),
+            'pkg/src/Base.php' => "<?php\nnamespace Acme\\Lib;\nclass Base {\n    public function vendorMethod(): void {}\n}\n",
+            'composer.json' => json_encode([
+                'repositories' => [['type' => 'path', 'url' => 'pkg', 'options' => ['symlink' => false]], ['packagist.org' => false]],
+                'require' => ['acme/lib' => '*'],
+                'autoload' => ['psr-4' => ['L\\' => 'src/']],
+            ]),
+            'src/Foo.php' => "<?php\nnamespace L;\nuse Acme\\Lib\\Base;\nclass Foo extends Base {}\n",
+        ], 'base');
+        $this->commit([
+            'src/Foo.php' => "<?php\nnamespace L;\nuse Acme\\Lib\\Base;\nclass Foo extends Base {\n    public function vendorMethod(): void {}\n}\n",
+        ], 'override vendor method on Foo');
+
+        $this->shell('COMPOSER_NO_AUDIT=1 composer install --no-interaction --no-progress --no-scripts --no-plugins');
+
+        $this->assertStringContainsString('L\\Foo::vendorMethod', $this->runDetect(), 'Sanity: without the composer project the override is flagged.');
+        $this->assertSame('', $this->runDetect(['COMPOSER_PROJECT_PATH' => $this->repoDir]));
+    }
+
+    public function testComposerProjectPathDoesNotLeakHeadSourcesIntoBaseSnapshot(): void
+    {
+        // Base (outside PATHS_GLOB) gains foo(), which Child already declared.
+        // The root package's PSR-4 map points at the HEAD checkout, so it must
+        // not be used to resolve Base while snapshotting BASE.
+        $this->commit([
+            'composer.json' => json_encode(['autoload' => ['psr-4' => ['L\\' => 'src/']]]),
+            'src/Internal/Base.php' => "<?php\nnamespace L\\Internal;\nclass Base {}\n",
+            'src/Api/Child.php' => "<?php\nnamespace L\\Api;\nclass Child extends \\L\\Internal\\Base {\n    public function foo(): void {}\n}\n",
+        ], 'base');
+        $this->commit([
+            'src/Internal/Base.php' => "<?php\nnamespace L\\Internal;\nclass Base {\n    public function foo(): void {}\n}\n",
+            'src/Api/Child.php' => "<?php\nnamespace L\\Api;\nclass Child extends \\L\\Internal\\Base {\n    public function foo(): void {}\n    // touched\n}\n",
+        ], 'move foo up');
+        $this->shell('COMPOSER_NO_AUDIT=1 composer install --no-interaction --no-progress --no-scripts --no-plugins');
+
+        $env = ['PATHS_GLOB' => 'src/Api/**/*.php'];
+        $this->assertSame($this->runDetect($env), $this->runDetect($env + ['COMPOSER_PROJECT_PATH' => $this->repoDir]));
+    }
+
     public function testTopLevelAndNestedFilesAreBothMatched(): void
     {
         $this->commit([

@@ -32,7 +32,7 @@ use Roave\BetterReflection\Reflector\Reflector;
 use Roave\BetterReflection\SourceLocator\Type\AggregateSourceLocator;
 use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\Exception\MissingComposerJson;
 use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\Exception\MissingInstalledJson;
-use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\MakeLocatorForComposerJsonAndInstalledJson;
+use Roave\BetterReflection\SourceLocator\Type\Composer\Factory\MakeLocatorForInstalledJson;
 use Roave\BetterReflection\SourceLocator\Type\DirectoriesSourceLocator;
 use Roave\BetterReflection\SourceLocator\Type\MemoizingSourceLocator;
 use Roave\BetterReflection\SourceLocator\Type\PhpInternalSourceLocator;
@@ -183,9 +183,11 @@ final class Snapshotter
         // resolve in O(1) via prefix mapping. Without this, parent resolution into
         // vendor walks every file (~thousands of file reads + AST parses per FQCN
         // miss) — the dominant cost on real-world projects.
+        // Installed packages only: the root package's autoload points at the HEAD
+        // checkout, which would leak into the BASE snapshot. source-roots cover it.
         if ($this->composerProjectPath !== null && is_dir($this->composerProjectPath)) {
             try {
-                $locators[] = (new MakeLocatorForComposerJsonAndInstalledJson())($this->composerProjectPath, $astLocator);
+                $locators[] = (new MakeLocatorForInstalledJson())($this->composerProjectPath, $astLocator);
             } catch (MissingComposerJson | MissingInstalledJson) {
                 // Fall through to source-roots only.
             }
