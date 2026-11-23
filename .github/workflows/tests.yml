@@ -51,8 +51,11 @@ jobs:
           persist-credentials: false
 
       # Runs the analyze half of the action from this branch against this PR.
+      # paths covers all PHP files so the full analysis runs on most PRs here.
       - uses: ./
         with:
+          paths: '**/*.php'
+          source-roots: 'src tests'
           checkout: 'false'
           install-dependencies: 'true'
           artifact-name: api-surface-self-test
